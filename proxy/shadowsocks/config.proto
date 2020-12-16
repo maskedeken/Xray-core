@@ -17,14 +17,19 @@ message Account {
 
 enum CipherType {
   UNKNOWN = 0;
-  AES_128_CFB = 1;
-  AES_256_CFB = 2;
-  CHACHA20 = 3;
-  CHACHA20_IETF = 4;
-  AES_128_GCM = 5;
-  AES_256_GCM = 6;
-  CHACHA20_POLY1305 = 7;
-  NONE = 8;
+  RC4_MD5_6 = 1;
+  RC4_MD5 = 2;
+  SM4_128_CFB = 3;
+  AES_128_CFB = 4;
+  AES_256_CFB = 5;
+  CHACHA20 = 6;
+  CHACHA20_IETF = 7;
+  SM4_128_GCM = 8;
+  AES_128_GCM = 9;
+  AES_256_GCM = 10;
+  CHACHA20_POLY1305 = 11;
+  XCHACHA20_POLY1305 = 12;
+  NONE = 13;
 }
 
 message ServerConfig {

@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
+	"crypto/rc4"
 	"crypto/sha1"
 	"io"
 
@@ -45,8 +46,20 @@ func createChacha20Poly1305(key []byte) cipher.AEAD {
 	return chacha20
 }
 
+func createXChacha20Poly1305(key []byte) cipher.AEAD {
+	xchacha20, err := chacha20poly1305.NewX(key)
+	common.Must(err)
+	return xchacha20
+}
+
 func (a *Account) getCipher() (Cipher, error) {
 	switch a.CipherType {
+	case CipherType_RC4_MD5_6:
+		return &rc4Md5{IVBytes: 6}, nil
+	case CipherType_RC4_MD5:
+		return &rc4Md5{IVBytes: 16}, nil
+	case CipherType_SM4_128_CFB:
+		return &Sm4Cfb{}, nil
 	case CipherType_AES_128_CFB:
 		return &AesCfb{KeyBytes: 16}, nil
 	case CipherType_AES_256_CFB:
@@ -55,6 +68,12 @@ func (a *Account) getCipher() (Cipher, error) {
 		return &ChaCha20{IVBytes: 8}, nil
 	case CipherType_CHACHA20_IETF:
 		return &ChaCha20{IVBytes: 12}, nil
+	case CipherType_SM4_128_GCM:
+		return &AEADCipher{
+			KeyBytes:        16,
+			IVBytes:         16,
+			AEADAuthCreator: crypto.NewSm4Gcm,
+		}, nil
 	case CipherType_AES_128_GCM:
 		return &AEADCipher{
 			KeyBytes:        16,
@@ -72,6 +91,12 @@ func (a *Account) getCipher() (Cipher, error) {
 			KeyBytes:        32,
 			IVBytes:         32,
 			AEADAuthCreator: createChacha20Poly1305,
+		}, nil
+	case CipherType_XCHACHA20_POLY1305:
+		return &AEADCipher{
+			KeyBytes:        32,
+			IVBytes:         32,
+			AEADAuthCreator: createXChacha20Poly1305,
 		}, nil
 	case CipherType_NONE:
 		return NoneCipher{}, nil
@@ -101,6 +126,106 @@ type Cipher interface {
 	IsAEAD() bool
 	EncodePacket(key []byte, b *buf.Buffer) error
 	DecodePacket(key []byte, b *buf.Buffer) error
+}
+
+type rc4Md5 struct {
+	IVBytes int32
+}
+
+func (*rc4Md5) IsAEAD() bool {
+	return false
+}
+
+func (*rc4Md5) KeySize() int32 {
+	return 16
+}
+
+func (v *rc4Md5) IVSize() int32 {
+	return v.IVBytes
+}
+
+func (v *rc4Md5) NewEncryptionWriter(key []byte, iv []byte, writer io.Writer) (buf.Writer, error) {
+	stream := v.encrypter(key, iv)
+	return &buf.SequentialWriter{Writer: crypto.NewCryptionWriter(stream, writer)}, nil
+}
+
+func (v *rc4Md5) NewDecryptionReader(key []byte, iv []byte, reader io.Reader) (buf.Reader, error) {
+	stream := v.encrypter(key, iv)
+	return &buf.SingleReader{
+		Reader: crypto.NewCryptionReader(stream, reader),
+	}, nil
+}
+
+func (v *rc4Md5) EncodePacket(key []byte, b *buf.Buffer) error {
+	iv := b.BytesTo(v.IVSize())
+	stream := v.encrypter(key, iv)
+	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
+	return nil
+}
+
+func (v *rc4Md5) DecodePacket(key []byte, b *buf.Buffer) error {
+	if b.Len() <= v.IVSize() {
+		return newError("insufficient data: ", b.Len())
+	}
+	iv := b.BytesTo(v.IVSize())
+	stream := v.encrypter(key, iv)
+	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
+	b.Advance(v.IVSize())
+	return nil
+}
+
+func (v *rc4Md5) encrypter(key []byte, iv []byte) cipher.Stream {
+	h := md5.New()
+	h.Write(key)
+	h.Write(iv)
+	rc4key := h.Sum(nil)
+	c, _ := rc4.NewCipher(rc4key)
+	return c
+}
+
+// Sm4Cfb represents SM4-CFB ciphers.
+type Sm4Cfb struct{}
+
+func (*Sm4Cfb) IsAEAD() bool {
+	return false
+}
+
+func (v *Sm4Cfb) KeySize() int32 {
+	return 16
+}
+
+func (v *Sm4Cfb) IVSize() int32 {
+	return v.KeySize()
+}
+
+func (v *Sm4Cfb) NewEncryptionWriter(key []byte, iv []byte, writer io.Writer) (buf.Writer, error) {
+	stream := crypto.NewSm4EncryptionStream(key, iv)
+	return &buf.SequentialWriter{Writer: crypto.NewCryptionWriter(stream, writer)}, nil
+}
+
+func (v *Sm4Cfb) NewDecryptionReader(key []byte, iv []byte, reader io.Reader) (buf.Reader, error) {
+	stream := crypto.NewSm4DecryptionStream(key, iv)
+	return &buf.SingleReader{
+		Reader: crypto.NewCryptionReader(stream, reader),
+	}, nil
+}
+
+func (v *Sm4Cfb) EncodePacket(key []byte, b *buf.Buffer) error {
+	iv := b.BytesTo(v.IVSize())
+	stream := crypto.NewSm4EncryptionStream(key, iv)
+	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
+	return nil
+}
+
+func (v *Sm4Cfb) DecodePacket(key []byte, b *buf.Buffer) error {
+	if b.Len() <= v.IVSize() {
+		return newError("insufficient data: ", b.Len())
+	}
+	iv := b.BytesTo(v.IVSize())
+	stream := crypto.NewSm4DecryptionStream(key, iv)
+	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
+	b.Advance(v.IVSize())
+	return nil
 }
 
 // AesCfb represents all AES-CFB ciphers.
@@ -169,11 +294,12 @@ func (c *AEADCipher) IVSize() int32 {
 }
 
 func (c *AEADCipher) createAuthenticator(key []byte, iv []byte) *crypto.AEADAuthenticator {
-	nonce := crypto.GenerateInitialAEADNonce()
 	subkey := make([]byte, c.KeyBytes)
 	hkdfSHA1(key, iv, subkey)
+	aead := c.AEADAuthCreator(subkey)
+	nonce := crypto.GenerateAEADNonceWithSize(aead.NonceSize())
 	return &crypto.AEADAuthenticator{
-		AEAD:           c.AEADAuthCreator(subkey),
+		AEAD:           aead,
 		NonceGenerator: nonce,
 	}
 }
