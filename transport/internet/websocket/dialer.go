@@ -2,15 +2,30 @@ package websocket
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/tls"
 )
+
+type muxSession struct {
+	addr         string
+	client       *smux.Session
+	underlayConn net.Conn
+}
+
+type muxPool struct {
+	sync.Mutex
+	sessions map[string]*muxSession
+}
+
+var pool = muxPool{sessions: make(map[string]*muxSession)}
 
 // Dial dials a WebSocket connection to the given destination.
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
@@ -28,6 +43,51 @@ func init() {
 }
 
 func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
+	wsSettings := streamSettings.ProtocolSettings.(*Config)
+	if !wsSettings.Mux {
+		newError("creating connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
+		return dialConn(ctx, dest, streamSettings)
+	} else {
+		newError("creating mux connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
+	}
+
+	createNewMuxConn := func(sess *muxSession) (net.Conn, error) {
+		stream, err := sess.client.OpenStream()
+		if err != nil {
+			sess.underlayConn.Close()
+			sess.client.Close()
+			delete(pool.sessions, sess.addr)
+			return nil, newError("failed to open mux stream").Base(err)
+		}
+
+		return &muxConnection{Conn: sess.underlayConn, stream: stream}, nil
+	}
+
+	pool.Lock()
+	defer pool.Unlock()
+	host := dest.Address.String()
+	sess, ok := pool.sessions[host]
+	if ok && !sess.client.IsClosed() {
+		return createNewMuxConn(sess)
+	}
+
+	conn, err := dialConn(ctx, dest, streamSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	smuxConfig := smux.DefaultConfig()
+	client, err := smux.Client(conn, smuxConfig)
+	if err != nil {
+		return nil, newError("failed to create mux session").Base(err)
+	}
+
+	sess = &muxSession{addr: host, client: client, underlayConn: conn}
+	pool.sessions[host] = sess
+	return createNewMuxConn(sess)
+}
+
+func dialConn(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
 	wsSettings := streamSettings.ProtocolSettings.(*Config)
 
 	dialer := &websocket.Dialer{

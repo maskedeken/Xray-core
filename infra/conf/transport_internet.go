@@ -142,7 +142,7 @@ type WebSocketConfig struct {
 }
 
 // Build implements Buildable.
-func (c *WebSocketConfig) Build() (proto.Message, error) {
+func (c *WebSocketConfig) Build() (*websocket.Config, error) {
 	path := c.Path
 	if path == "" && c.Path2 != "" {
 		path = c.Path2
@@ -419,6 +419,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "mkcp", nil
 	case "ws", "websocket":
 		return "websocket", nil
+	case "mws":
+		return "websocket", nil
 	case "h2", "http":
 		return "http", nil
 	case "ds", "domainsocket":
@@ -550,6 +552,10 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		ts, err := c.WSSettings.Build()
 		if err != nil {
 			return nil, newError("Failed to build WebSocket config.").Base(err)
+		}
+
+		if strings.ToLower(string(*c.Network)) == "mws" {
+			ts.Mux = true // enable mux
 		}
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "websocket",

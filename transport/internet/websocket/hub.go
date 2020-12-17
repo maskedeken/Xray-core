@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/xtaci/smux"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
@@ -20,6 +21,7 @@ import (
 type requestHandler struct {
 	path string
 	ln   *Listener
+	mux  bool
 }
 
 var upgrader = &websocket.Upgrader{
@@ -51,7 +53,34 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		}
 	}
 
-	h.ln.addConn(newConnection(conn, remoteAddr))
+	c := newConnection(conn, remoteAddr)
+	if !h.mux {
+		h.ln.addConn(c)
+		return
+	}
+
+	h.serveMUX(c) // handle mux session
+}
+
+func (h *requestHandler) serveMUX(conn internet.Connection) {
+	smuxConfig := smux.DefaultConfig()
+	session, err := smux.Server(conn, smuxConfig)
+	if err != nil {
+		newError("failed to create mux session").Base(err).WriteToLog()
+		return
+	}
+
+	defer session.Close()
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			newError("mux session ends").Base(err).AtInfo().WriteToLog()
+			return
+		}
+
+		c := &muxConnection{Conn: conn, stream: stream}
+		h.ln.addConn(c)
+	}
 }
 
 type Listener struct {
@@ -117,6 +146,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		Handler: &requestHandler{
 			path: wsSettings.GetNormalizedPath(),
 			ln:   l,
+			mux:  wsSettings.Mux,
 		},
 		ReadHeaderTimeout: time.Second * 4,
 		MaxHeaderBytes:    2048,
