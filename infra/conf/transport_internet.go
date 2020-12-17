@@ -288,13 +288,15 @@ func (c *TLSCertConfig) Build() (*tls.Certificate, error) {
 
 type TLSConfig struct {
 	Insecure                 bool             `json:"allowInsecure"`
-	InsecureCiphers          bool             `json:"allowInsecureCiphers"`
 	Certs                    []*TLSCertConfig `json:"certificates"`
 	ServerName               string           `json:"serverName"`
 	ALPN                     *StringList      `json:"alpn"`
 	DisableSessionResumption bool             `json:"disableSessionResumption"`
 	DisableSystemRoot        bool             `json:"disableSystemRoot"`
 	MinVersion               string           `json:"minVersion"`
+	MaxVersion               string           `json:"maxVersion"`
+	CipherSuites             string           `json:"cipherSuites"`
+	PreferServerCipherSuites bool             `json:"preferServerCipherSuites"`
 }
 
 // Build implements Buildable.
@@ -309,9 +311,7 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 		config.Certificate[idx] = cert
 	}
 	serverName := c.ServerName
-	config.MinVersion = c.MinVersion
 	config.AllowInsecure = c.Insecure
-	config.AllowInsecureCiphers = c.InsecureCiphers
 	if len(c.ServerName) > 0 {
 		config.ServerName = serverName
 	}
@@ -320,6 +320,10 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 	}
 	config.DisableSessionResumption = c.DisableSessionResumption
 	config.DisableSystemRoot = c.DisableSystemRoot
+	config.MinVersion = c.MinVersion
+	config.MaxVersion = c.MaxVersion
+	config.CipherSuites = c.CipherSuites
+	config.PreferServerCipherSuites = c.PreferServerCipherSuites
 	return config, nil
 }
 
@@ -365,13 +369,15 @@ func (c *XTLSCertConfig) Build() (*xtls.Certificate, error) {
 
 type XTLSConfig struct {
 	Insecure                 bool              `json:"allowInsecure"`
-	InsecureCiphers          bool              `json:"allowInsecureCiphers"`
 	Certs                    []*XTLSCertConfig `json:"certificates"`
 	ServerName               string            `json:"serverName"`
 	ALPN                     *StringList       `json:"alpn"`
 	DisableSessionResumption bool              `json:"disableSessionResumption"`
 	DisableSystemRoot        bool              `json:"disableSystemRoot"`
 	MinVersion               string            `json:"minVersion"`
+	MaxVersion               string            `json:"maxVersion"`
+	CipherSuites             string            `json:"cipherSuites"`
+	PreferServerCipherSuites bool              `json:"preferServerCipherSuites"`
 }
 
 // Build implements Buildable.
@@ -387,16 +393,18 @@ func (c *XTLSConfig) Build() (proto.Message, error) {
 	}
 	serverName := c.ServerName
 	config.AllowInsecure = c.Insecure
-	config.AllowInsecureCiphers = c.InsecureCiphers
 	if len(c.ServerName) > 0 {
 		config.ServerName = serverName
 	}
 	if c.ALPN != nil && len(*c.ALPN) > 0 {
 		config.NextProtocol = []string(*c.ALPN)
 	}
-	config.MinVersion = c.MinVersion
 	config.DisableSessionResumption = c.DisableSessionResumption
 	config.DisableSystemRoot = c.DisableSystemRoot
+	config.MinVersion = c.MinVersion
+	config.MaxVersion = c.MaxVersion
+	config.CipherSuites = c.CipherSuites
+	config.PreferServerCipherSuites = c.PreferServerCipherSuites
 	return config, nil
 }
 
