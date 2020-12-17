@@ -25,6 +25,8 @@ func (a *VMessAccount) Build() *vmess.Account {
 	switch strings.ToLower(a.Security) {
 	case "aes-128-gcm":
 		st = protocol.SecurityType_AES128_GCM
+	case "sm4-128-gcm":
+		st = protocol.SecurityType_SM4_GCM
 	case "chacha20-poly1305":
 		st = protocol.SecurityType_CHACHA20_POLY1305
 	case "auto":
