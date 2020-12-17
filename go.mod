@@ -13,6 +13,7 @@ require (
 	github.com/pires/go-proxyproto v0.3.3
 	github.com/seiflotfy/cuckoofilter v0.0.0-20201009151232-afb285a456ab
 	github.com/stretchr/testify v1.6.1
+	github.com/tjfoc/gmsm v1.3.2
 	github.com/xtls/go v0.0.0-20201118062508-3632bf3b7499
 	go.starlark.net v0.0.0-20201210151846-e81fc95f7bd5
 	golang.org/x/crypto v0.0.0-20201208171446-5f87f3452ae9
@@ -22,4 +23,6 @@ require (
 	google.golang.org/grpc v1.34.0
 	google.golang.org/protobuf v1.25.0
 	h12.io/socks v1.0.1
+	v2ray.com/core v4.19.1+incompatible
+	github.com/xtaci/smux v1.5.14
 )

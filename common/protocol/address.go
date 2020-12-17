@@ -208,6 +208,10 @@ func (p *addressParser) readAddress(b *buf.Buffer, reader io.Reader) (net.Addres
 		if _, err := b.ReadFullFrom(reader, domainLength); err != nil {
 			return nil, err
 		}
+		if domainLength <= 0 { // fix no domain issue
+			return net.DomainAddress(""), nil
+		}
+
 		domain := string(b.BytesFrom(-domainLength))
 		if maybeIPPrefix(domain[0]) {
 			addr := net.ParseAddress(domain)

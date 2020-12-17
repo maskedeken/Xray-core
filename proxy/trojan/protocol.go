@@ -42,6 +42,7 @@ const (
 
 	commandTCP byte = 1
 	commandUDP byte = 3
+	commandMUX byte = 0x7f
 
 	// for XTLS
 	commandXRD byte = 0xf0 // XTLS direct mode
@@ -189,6 +190,12 @@ type ConnReader struct {
 	Target       net.Destination
 	Flow         string
 	headerParsed bool
+	mux          bool
+}
+
+// IsMux returns whether it is mux connection or not
+func (c *ConnReader) IsMux() bool {
+	return c.mux
 }
 
 // ParseHeader parses the trojan protocol header
@@ -211,6 +218,8 @@ func (c *ConnReader) ParseHeader() error {
 	network := net.Network_TCP
 	if command[0] == commandUDP {
 		network = net.Network_UDP
+	} else if command[0] == commandMUX {
+		c.mux = true
 	} else if command[0] == commandXRD {
 		c.Flow = XRD
 	} else if command[0] == commandXRO {
@@ -311,6 +320,84 @@ func (r *PacketReader) ReadMultiBufferWithMetadata() (*PacketPayload, error) {
 	}
 
 	return &PacketPayload{Target: dest, Buffer: mb}, nil
+}
+
+// MuxConn is Reader/Write/Close Wrapper for smux
+type MuxConn struct {
+	io.Reader
+	io.Writer
+}
+
+// Close implements io.Closer
+func (*MuxConn) Close() error {
+	return nil
+}
+
+// SimpleSocksConn is SimpleSocks Reader/Write Wrapper for SimpleSocks
+type SimpleSocksConn struct {
+	io.ReadWriter
+	Target       net.Destination
+	headerParsed bool
+}
+
+// Read implements io.Reader
+func (c *SimpleSocksConn) Read(p []byte) (int, error) {
+	if !c.headerParsed {
+		if err := c.ParseHeader(); err != nil {
+			return 0, err
+		}
+	}
+
+	return c.ReadWriter.Read(p)
+}
+
+// ReadMultiBuffer implements buf.Reader
+func (c *SimpleSocksConn) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	b := buf.New()
+	_, err := b.ReadFrom(c)
+	return buf.MultiBuffer{b}, err
+}
+
+// ParseHeader reads header for destination
+func (c *SimpleSocksConn) ParseHeader() error {
+	var command [1]byte
+	if _, err := io.ReadFull(c.ReadWriter, command[:]); err != nil {
+		return newError("failed to read command").Base(err)
+	}
+	addr, port, err := addrParser.ReadAddressPort(nil, c.ReadWriter)
+	if err != nil {
+		return newError("failed to read address and port").Base(err)
+	}
+
+	network := net.Network_TCP
+	if command[0] == commandUDP {
+		network = net.Network_UDP
+	}
+
+	c.Target = net.Destination{Address: addr, Port: port, Network: network}
+	c.headerParsed = true
+	return nil
+}
+
+// Write implements io.Writer
+func (c *SimpleSocksConn) Write(p []byte) (n int, err error) {
+	n, err = c.ReadWriter.Write(p)
+	return n, err
+}
+
+// WriteMultiBuffer implements buf.Writer
+func (c *SimpleSocksConn) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	defer buf.ReleaseMulti(mb)
+
+	for _, b := range mb {
+		if !b.IsEmpty() {
+			if _, err := c.Write(b.Bytes()); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func ReadV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, conn *xtls.Conn, rawConn syscall.RawConn, counter stats.Counter, sctx context.Context) error {

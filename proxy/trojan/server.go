@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -201,6 +202,8 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 
 	if destination.Network == net.Network_UDP { // handle udp request
 		return s.handleUDPPayload(ctx, &PacketReader{Reader: clientReader}, &PacketWriter{Writer: conn}, dispatcher)
+	} else if clientReader.IsMux() { // handle mux request
+		return s.handleMuxConnection(ctx, sessionPolicy, &MuxConn{Reader: clientReader, Writer: conn}, dispatcher)
 	}
 
 	// handle tcp request
@@ -246,6 +249,48 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 
 	newError("received request for ", destination).WriteToLog(sid)
 	return s.handleConnection(ctx, sessionPolicy, destination, clientReader, buf.NewWriter(conn), dispatcher, iConn, rawConn, statConn)
+}
+
+func (s *Server) handleMuxConnection(ctx context.Context, sessionPolicy policy.Session, conn io.ReadWriteCloser, dispatcher routing.Dispatcher) error {
+	config := smux.DefaultConfig()
+	sess, err := smux.Server(conn, config)
+	if err != nil {
+		newError("cannot create smux session").Base(err).WriteToLog(session.ExportIDToError(ctx))
+	}
+	defer sess.Close() // nolint: errcheck
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			stream, err := sess.AcceptStream()
+			if err != nil {
+				if errors.Cause(err) != io.EOF {
+					return newError("unexpected EOF").Base(err)
+				}
+				return nil
+			}
+
+			go func() {
+				defer stream.Close() // nolint: errcheck
+				sConn := &SimpleSocksConn{ReadWriter: stream}
+				if err := sConn.ParseHeader(); err != nil {
+					newError("cannot parse simple socks header").Base(err).WriteToLog(session.ExportIDToError(ctx))
+					return
+				}
+
+				destination := sConn.Target
+				if destination.Network == net.Network_UDP {
+					s.handleUDPPayload(ctx, &PacketReader{Reader: sConn}, &PacketWriter{Writer: sConn}, dispatcher)
+					return
+				}
+
+				s.handleConnection(ctx, sessionPolicy, destination, sConn, sConn, dispatcher, nil, nil, nil)
+			}()
+		}
+	}
+
 }
 
 func (s *Server) handleUDPPayload(ctx context.Context, clientReader *PacketReader, clientWriter *PacketWriter, dispatcher routing.Dispatcher) error {
