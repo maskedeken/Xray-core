@@ -1,4 +1,4 @@
-package jsonem
+package toml
 
 import "github.com/xtls/xray-core/common/errors"
 
