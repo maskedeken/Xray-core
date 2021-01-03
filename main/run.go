@@ -8,11 +8,16 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"syscall"
 
+	"github.com/golang/protobuf/proto"
+
+	"github.com/xtls/xray-core/app/proxyman"
+	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/cmdarg"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
@@ -116,7 +121,11 @@ func readConfDir(dirPath string) {
 		log.Fatalln(err)
 	}
 	for _, f := range confs {
-		if strings.HasSuffix(f.Name(), ".json") {
+		matched, err := regexp.MatchString(`^.+\.(json|toml|yaml|yml)$`, f.Name())
+		if err != nil {
+			log.Fatalln(err)
+		}
+		if matched {
 			configFiles.Set(path.Join(dirPath, f.Name()))
 		}
 	}
@@ -174,6 +183,26 @@ func startXray() (core.Server, error) {
 
 	if err != nil {
 		return nil, newError("failed to load config files: [", configFiles.String(), "]").Base(err)
+	}
+
+	v, t := false, false
+	for _, outbound := range config.Outbound {
+		s := strings.ToLower(outbound.ProxySettings.Type)
+		l := len(s)
+		if l >= 16 && s[11:16] == "vless" || l >= 16 && s[11:16] == "vmess" {
+			v = true
+			continue
+		}
+		if l >= 17 && s[11:17] == "trojan" || l >= 22 && s[11:22] == "shadowsocks" {
+			var m proxyman.SenderConfig
+			proto.Unmarshal(outbound.SenderSettings.Value, &m)
+			if m.MultiplexSettings == nil || !m.MultiplexSettings.Enabled {
+				t = true
+			}
+		}
+	}
+	if v && !t {
+		buf.Cone = false
 	}
 
 	server, err := core.New(config)
