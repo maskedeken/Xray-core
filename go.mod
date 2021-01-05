@@ -17,6 +17,7 @@ require (
 	github.com/tjfoc/gmsm v1.3.2
 	github.com/xtaci/smux v1.5.14
 	github.com/xtls/go v0.0.0-20201118062508-3632bf3b7499
+	github.com/ginuerzh/tls-dissector v0.0.2-0.20200224064855-24ab2b3a3796
 	go.starlark.net v0.0.0-20201210151846-e81fc95f7bd5
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
 	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
