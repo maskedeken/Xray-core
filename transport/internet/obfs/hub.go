@@ -73,13 +73,13 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 					return
 				}
 
-				httpConn := ServerObfsHTTPConn(conn, obfsSettings.Host)
-				if err := httpConn.Handshake(); err != nil {
+				fakeHTTPConn := ServerObfsHTTPConn(conn, obfsSettings.Host)
+				if err := fakeHTTPConn.Handshake(); err != nil {
 					newError("failed to perform http handshake with ", conn.RemoteAddr().String()).Base(err).AtWarning().WriteToLog()
 					return
 				}
 
-				addConn(internet.Connection(httpConn))
+				addConn(internet.Connection(fakeHTTPConn))
 			}()
 
 		}
