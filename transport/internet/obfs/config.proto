@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package xray.transport.internet.obfs;
+option csharp_namespace = "Xray.Transport.Internet.Obfs";
+option go_package = "github.com/xtls/xray-core/transport/internet/obfs";
+option java_package = "com.xray.transport.internet.obfs";
+option java_multiple_files = true;
+
+enum ObfsType {
+  UNKNOWN = 0;
+  HTTP = 1;
+  TLS = 2;
+}
+
+message Config {
+  reserved 1;
+  ObfsType type = 2;
+  string host = 3;
+}

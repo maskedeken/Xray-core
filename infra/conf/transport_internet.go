@@ -12,6 +12,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/domainsocket"
 	"github.com/xtls/xray-core/transport/internet/http"
 	"github.com/xtls/xray-core/transport/internet/kcp"
+	"github.com/xtls/xray-core/transport/internet/obfs"
 	"github.com/xtls/xray-core/transport/internet/quic"
 	"github.com/xtls/xray-core/transport/internet/tcp"
 	"github.com/xtls/xray-core/transport/internet/tls"
@@ -236,6 +237,32 @@ func (c *DomainSocketConfig) Build() (proto.Message, error) {
 	}, nil
 }
 
+type ObfsConfig struct {
+	Type string `json:"type"`
+	Host string `json:"host"`
+}
+
+// Build implements Buildable.
+func (c *ObfsConfig) Build() (proto.Message, error) {
+	host := c.Host
+	if host == "" {
+		host = "bing.com"
+	}
+	obfsConfig := &obfs.Config{
+		Host: host,
+	}
+
+	switch strings.ToLower(c.Type) {
+	case "http":
+		obfsConfig.Type = obfs.ObfsType_HTTP
+	case "tls":
+		obfsConfig.Type = obfs.ObfsType_TLS
+	default:
+		return nil, newError("invalid Obfuscation type").AtError()
+	}
+	return obfsConfig, nil
+}
+
 func readFileOrString(f string, s []string) ([]byte, error) {
 	if len(f) > 0 {
 		return filesystem.ReadFile(f)
@@ -433,6 +460,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "domainsocket", nil
 	case "quic":
 		return "quic", nil
+	case "obfs":
+		return "obfs", nil
 	default:
 		return "", newError("Config: unknown transport protocol: ", p)
 	}
@@ -484,6 +513,7 @@ type StreamConfig struct {
 	HTTPSettings   *HTTPConfig         `json:"httpSettings"`
 	DSSettings     *DomainSocketConfig `json:"dsSettings"`
 	QUICSettings   *QUICConfig         `json:"quicSettings"`
+	ObfsSettings   *ObfsConfig         `json:"obfsSettings"`
 	SocketSettings *SocketConfig       `json:"sockopt"`
 }
 
@@ -596,6 +626,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "quic",
 			Settings:     serial.ToTypedMessage(qs),
+		})
+	}
+	if c.ObfsSettings != nil {
+		os, err := c.ObfsSettings.Build()
+		if err != nil {
+			return nil, newError("Failed to build Obfuscation config").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "obfs",
+			Settings:     serial.ToTypedMessage(os),
 		})
 	}
 	if c.SocketSettings != nil {
