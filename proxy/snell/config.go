@@ -89,32 +89,6 @@ func (c *SnellCipher) NewDecryptionReader(key []byte, iv []byte, reader io.Reade
 	}, reader, protocol.TransferTypeStream, nil), nil
 }
 
-func (c *SnellCipher) EncodePacket(key []byte, b *buf.Buffer) error {
-	ivLen := c.IVSize()
-	payloadLen := b.Len()
-	auth := c.createAuthenticator(key, b.BytesTo(ivLen))
-
-	b.Extend(int32(auth.Overhead()))
-	_, err := auth.Seal(b.BytesTo(ivLen), b.BytesRange(ivLen, payloadLen))
-	return err
-}
-
-func (c *SnellCipher) DecodePacket(key []byte, b *buf.Buffer) error {
-	if b.Len() <= c.IVSize() {
-		return newError("insufficient data: ", b.Len())
-	}
-	ivLen := c.IVSize()
-	payloadLen := b.Len()
-	auth := c.createAuthenticator(key, b.BytesTo(ivLen))
-
-	bbb, err := auth.Open(b.BytesTo(ivLen), b.BytesRange(ivLen, payloadLen))
-	if err != nil {
-		return err
-	}
-	b.Resize(ivLen, int32(len(bbb)))
-	return nil
-}
-
 func snellKDF(psk, salt []byte, keySize int32) []byte {
 	// snell use a special kdf function
 	return argon2.IDKey(psk, salt, 3, 8, 1, 32)[:keySize]
