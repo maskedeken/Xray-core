@@ -24,10 +24,6 @@ const (
 	CommandTunnel byte = 0
 	CommandPong   byte = 1
 	CommandError  byte = 2
-
-	ResponseTunnel byte = 0
-	ResponsePong   byte = 1
-	ResponseError  byte = 2
 )
 
 // WriteTCPRequest writes Snell request into the given writer, and returns a writer for body.
@@ -137,14 +133,18 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 		return nil, nil, err
 	}
 
-	if buffer.Byte(0) != Version {
+	switch buffer.Byte(0) {
+	case Version:
+	default:
 		mbContainer.Close()
 		return nil, nil, newError("invalid snell version")
 	}
 
 	cmd := buffer.Byte(1)   // command
 	idLen := buffer.Byte(2) // user id length
-	if cmd != CommandPing && cmd != CommandConnect {
+	switch cmd {
+	case CommandPing, CommandConnect:
+	default:
 		mbContainer.Close()
 		return nil, nil, newError("invalid snell command")
 	}
@@ -207,7 +207,7 @@ func WriteResponse(request *protocol.RequestHeader, writer io.Writer) (buf.Write
 	return bw, nil
 }
 
-func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg []byte) error {
+func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg string) error {
 	account := user.Account.(*MemoryAccount)
 
 	w, err := initWriter(account, writer)
@@ -219,7 +219,7 @@ func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg []by
 	bw.WriteByte(CommandError)
 	bw.WriteByte(255)                // error code
 	bw.WriteByte(uint8(len(errMsg))) // error message length
-	bw.Write(errMsg)
+	bw.Write([]byte(errMsg))
 	bw.SetBuffered(false)
 	return nil
 }

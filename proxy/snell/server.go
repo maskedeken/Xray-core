@@ -84,7 +84,7 @@ func (s *Server) handleConnection(ctx context.Context, conn internet.Connection,
 	conn.SetReadDeadline(time.Time{})
 
 	if request.Command == protocol.RequestCommand(CommandPing) { // reponse pong if got ping
-		conn.Write([]byte{ResponsePong})
+		conn.Write([]byte{CommandPong})
 		return nil
 	}
 
@@ -164,7 +164,7 @@ func (s *Server) handleConnection(ctx context.Context, conn internet.Connection,
 }
 
 func (s *Server) handleError(user *protocol.MemoryUser, conn internet.Connection, errMsg string) error {
-	return WriteErrorResponse(user, conn, []byte(errMsg))
+	return WriteErrorResponse(user, conn, errMsg)
 }
 
 func init() {
