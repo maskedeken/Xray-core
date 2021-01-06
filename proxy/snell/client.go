@@ -51,9 +51,12 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	if outbound == nil || !outbound.Target.IsValid() {
 		return newError("target not specified")
 	}
+	var cmd protocol.RequestCommand
 	destination := outbound.Target
-	if destination.Network != net.Network_TCP {
-		return newError("only TCP request is supported")
+	if destination.Network == net.Network_UDP {
+		cmd = protocol.RequestCommand(CommandUDP)
+	} else {
+		cmd = protocol.RequestCommand(CommandConnect)
 	}
 
 	var server *protocol.ServerSpec
@@ -87,6 +90,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		Address: destination.Address,
 		Port:    destination.Port,
 		User:    user,
+		Command: cmd,
 	}
 
 	sessionPolicy := c.policyManager.ForLevel(user.Level)

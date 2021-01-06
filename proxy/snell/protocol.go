@@ -19,6 +19,7 @@ const (
 const (
 	CommandPing      byte = 0
 	CommandConnect   byte = 1
+	CommandUDP       byte = 3
 	CommandConnectV2 byte = 5
 
 	CommandTunnel byte = 0
@@ -39,8 +40,9 @@ func WriteRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Writer
 	header := buf.New()
 	defer header.Release()
 
+	cmd := byte(request.Command)
 	header.WriteByte(Version)
-	header.WriteByte(CommandConnect)
+	header.WriteByte(cmd)
 
 	// clientID length & id
 	header.WriteByte(0)
@@ -52,6 +54,10 @@ func WriteRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Writer
 
 	if err := w.WriteMultiBuffer(buf.MultiBuffer{header}); err != nil {
 		return nil, newError("failed to write header").Base(err)
+	}
+
+	if cmd == CommandUDP {
+		return NewMultiLengthPacketWriter(w), nil
 	}
 
 	return w, nil
@@ -76,11 +82,20 @@ func ReadResponse(user *protocol.MemoryUser, reader io.Reader) (buf.Reader, erro
 		return nil, err
 	}
 
-	if buffer[0] == CommandTunnel {
-		return &buf.BufferedReader{
+	cmd := buffer[0]
+	switch cmd {
+	case CommandTunnel, CommandUDP:
+		br := &buf.BufferedReader{
 			Reader: r,
 			Buffer: mbContainer.MultiBuffer,
-		}, nil
+		}
+
+		if cmd == CommandTunnel {
+			return br, nil
+		}
+
+		return NewLengthPacketReader(br), nil
+	default:
 	}
 
 	defer mbContainer.Close()
@@ -143,7 +158,7 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 	cmd := buffer.Byte(1)   // command
 	idLen := buffer.Byte(2) // user id length
 	switch cmd {
-	case CommandPing, CommandConnect:
+	case CommandPing, CommandConnect, CommandUDP:
 	default:
 		mbContainer.Close()
 		return nil, nil, newError("invalid snell command")
@@ -189,6 +204,10 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 		Buffer: mbContainer.MultiBuffer,
 	}
 
+	if cmd == CommandUDP {
+		return request, NewLengthPacketReader(br), nil
+	}
+
 	return request, br, nil
 }
 
@@ -202,6 +221,12 @@ func WriteResponse(request *protocol.RequestHeader, writer io.Writer) (buf.Write
 	}
 
 	bw := buf.NewBufferedWriter(w)
+	if request.Command == protocol.RequestCommand(CommandUDP) {
+		bw.WriteByte(CommandUDP)
+		bw.SetBuffered(false)
+		return NewMultiLengthPacketWriter(bw), nil
+	}
+
 	bw.WriteByte(CommandTunnel)
 	bw.SetBuffered(false)
 	return bw, nil
@@ -247,4 +272,77 @@ func initReader(account *MemoryAccount, reader io.Reader) (buf.Reader, error) {
 	}
 
 	return account.Cipher.NewDecryptionReader(account.PSK, iv, reader)
+}
+
+func NewMultiLengthPacketWriter(writer buf.Writer) *MultiLengthPacketWriter {
+	return &MultiLengthPacketWriter{
+		Writer: writer,
+	}
+}
+
+type MultiLengthPacketWriter struct {
+	buf.Writer
+}
+
+func (w *MultiLengthPacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	defer buf.ReleaseMulti(mb)
+	mb2Write := make(buf.MultiBuffer, 0, len(mb)+1)
+	for _, b := range mb {
+		length := b.Len()
+		if length == 0 || length+2 > buf.Size {
+			continue
+		}
+		eb := buf.New()
+		if err := eb.WriteByte(byte(length >> 8)); err != nil {
+			eb.Release()
+			continue
+		}
+		if err := eb.WriteByte(byte(length)); err != nil {
+			eb.Release()
+			continue
+		}
+		if _, err := eb.Write(b.Bytes()); err != nil {
+			eb.Release()
+			continue
+		}
+		mb2Write = append(mb2Write, eb)
+	}
+	if mb2Write.IsEmpty() {
+		return nil
+	}
+	return w.Writer.WriteMultiBuffer(mb2Write)
+}
+
+func NewLengthPacketReader(reader io.Reader) *LengthPacketReader {
+	return &LengthPacketReader{
+		Reader: reader,
+		cache:  make([]byte, 2),
+	}
+}
+
+type LengthPacketReader struct {
+	io.Reader
+	cache []byte
+}
+
+func (r *LengthPacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	if _, err := io.ReadFull(r.Reader, r.cache); err != nil { // maybe EOF
+		return nil, newError("failed to read packet length").Base(err)
+	}
+	length := int32(r.cache[0])<<8 | int32(r.cache[1])
+	// fmt.Println("Read", length)
+	mb := make(buf.MultiBuffer, 0, length/buf.Size+1)
+	for length > 0 {
+		size := length
+		if size > buf.Size {
+			size = buf.Size
+		}
+		length -= size
+		b := buf.New()
+		if _, err := b.ReadFullFrom(r.Reader, size); err != nil {
+			return nil, newError("failed to read packet payload").Base(err)
+		}
+		mb = append(mb, b)
+	}
+	return mb, nil
 }

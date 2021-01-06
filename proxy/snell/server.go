@@ -85,7 +85,13 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	}
 	inbound.User = s.user
 
-	dest := request.Destination()
+	var dest net.Destination
+	if request.Command == protocol.RequestCommand(CommandUDP) {
+		dest = net.UDPDestination(request.Address, request.Port)
+	} else {
+		dest = net.TCPDestination(request.Address, request.Port)
+	}
+
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   conn.RemoteAddr(),
 		To:     dest,
