@@ -11,6 +11,19 @@ import (
 	"github.com/xtls/xray-core/transport/internet"
 )
 
+type Listener struct {
+	net.Listener
+	locker *internet.FileLocker // for unix domain socket
+}
+
+// Close implements net.Listener.Close().
+func (ln *Listener) Close() error {
+	if ln.locker != nil {
+		ln.locker.Release()
+	}
+	return ln.Listener.Close()
+}
+
 func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamSettings *internet.MemoryStreamConfig, addConn internet.ConnHandler) (internet.Listener, error) {
 	obfsSettings := streamSettings.ProtocolSettings.(*Config)
 	switch obfsSettings.Type {
@@ -20,10 +33,9 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 		return nil, newError("Unknown Obfuscation Type")
 	}
 
-	var listener net.Listener
-	var err error
+	ln := &Listener{}
 	if port == net.Port(0) { //unix
-		listener, err = internet.ListenSystem(ctx, &net.UnixAddr{
+		listener, err := internet.ListenSystem(ctx, &net.UnixAddr{
 			Name: address.Domain(),
 			Net:  "unix",
 		}, streamSettings.SocketSettings)
@@ -31,8 +43,14 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 			return nil, newError("failed to listen unix domain socket(for obfuscation) on ", address).Base(err)
 		}
 		newError("listening unix domain socket(for obfuscation) on ", address).WriteToLog(session.ExportIDToError(ctx))
+
+		ln.Listener = listener
+		locker := ctx.Value(address.Domain())
+		if locker != nil {
+			ln.locker = locker.(*internet.FileLocker)
+		}
 	} else { //tcp
-		listener, err = internet.ListenSystem(ctx, &net.TCPAddr{
+		listener, err := internet.ListenSystem(ctx, &net.TCPAddr{
 			IP:   address.IP(),
 			Port: int(port),
 		}, streamSettings.SocketSettings)
@@ -40,6 +58,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 			return nil, newError("failed to listen TCP(for obfuscation) on ", address, ":", port).Base(err)
 		}
 		newError("listening TCP(for obfuscation) on ", address, ":", port).WriteToLog(session.ExportIDToError(ctx))
+		ln.Listener = listener
 	}
 
 	if streamSettings.SocketSettings != nil && streamSettings.SocketSettings.AcceptProxyProtocol {
@@ -48,7 +67,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 
 	go func() {
 		for {
-			conn, err := listener.Accept()
+			conn, err := ln.Accept()
 			if err != nil {
 				errStr := err.Error()
 				if strings.Contains(errStr, "closed") {
@@ -85,7 +104,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 		}
 	}()
 
-	return listener, err
+	return ln, nil
 }
 
 func init() {

@@ -47,19 +47,10 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 }
 
 func (s *Server) Network() []net.Network {
-	return []net.Network{net.Network_TCP}
+	return []net.Network{net.Network_TCP, net.Network_UNIX}
 }
 
 func (s *Server) Process(ctx context.Context, network net.Network, conn internet.Connection, dispatcher routing.Dispatcher) error {
-	switch network {
-	case net.Network_TCP:
-		return s.handleConnection(ctx, conn, dispatcher)
-	default:
-		return newError("unsupported network: ", network)
-	}
-}
-
-func (s *Server) handleConnection(ctx context.Context, conn internet.Connection, dispatcher routing.Dispatcher) error {
 	sessionPolicy := s.policyManager.ForLevel(s.user.Level)
 	conn.SetReadDeadline(time.Now().Add(sessionPolicy.Timeouts.Handshake))
 
