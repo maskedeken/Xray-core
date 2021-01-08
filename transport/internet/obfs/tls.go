@@ -3,6 +3,7 @@ package obfs
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"io"
 	"io/ioutil"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	dissector "github.com/ginuerzh/tls-dissector"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 )
 
@@ -18,19 +20,8 @@ const (
 )
 
 var (
-	cipherSuites = []uint16{
-		0xc02c, 0xc030, 0x009f, 0xcca9, 0xcca8, 0xccaa, 0xc02b, 0xc02f,
-		0x009e, 0xc024, 0xc028, 0x006b, 0xc023, 0xc027, 0x0067, 0xc00a,
-		0xc014, 0x0039, 0xc009, 0xc013, 0x0033, 0x009d, 0x009c, 0x003d,
-		0x003c, 0x0035, 0x002f, 0x00ff,
-	}
-
-	compressionMethods = []uint8{0x00}
-
-	algorithms = []uint16{
-		0x0601, 0x0602, 0x0603, 0x0501, 0x0502, 0x0503, 0x0401, 0x0402,
-		0x0403, 0x0301, 0x0302, 0x0303, 0x0201, 0x0202, 0x0203,
-	}
+	ErrBadType  = errors.New("bad type")
+	ErrBadHello = errors.New("bad hello")
 )
 
 type obfsTLSConn struct {
@@ -68,73 +59,139 @@ func (c *obfsTLSConn) Handshake(b []byte) (err error) {
 }
 
 func (c *obfsTLSConn) clientHandshake(payload []byte) (err error) {
-	clientMsg := &dissector.ClientHelloMsg{
-		Version:            tls.VersionTLS12,
-		SessionID:          make([]byte, 32),
-		CipherSuites:       cipherSuites,
-		CompressionMethods: compressionMethods,
-		Extensions: []dissector.Extension{
-			&dissector.SessionTicketExtension{
-				Data: payload,
-			},
-			&dissector.ServerNameExtension{
-				Name: c.host,
-			},
-			&dissector.ECPointFormatsExtension{
-				Formats: []uint8{0x01, 0x00, 0x02},
-			},
-			&dissector.SupportedGroupsExtension{
-				Groups: []uint16{0x001d, 0x0017, 0x0019, 0x0018},
-			},
-			&dissector.SignatureAlgorithmsExtension{
-				Algorithms: algorithms,
-			},
-			&dissector.EncryptThenMacExtension{},
-			&dissector.ExtendedMasterSecretExtension{},
-		},
-	}
-	clientMsg.Random.Time = uint32(time.Now().Unix())
-	rand.Read(clientMsg.Random.Opaque[:])
-	rand.Read(clientMsg.SessionID)
-	b, err := clientMsg.Encode()
-	if err != nil {
-		return
-	}
+	mbContainer := &buf.MultiBufferContainer{}
+	defer mbContainer.Close()
 
-	record := &dissector.Record{
-		Type:    dissector.Handshake,
-		Version: tls.VersionTLS10,
-		Opaque:  b,
-	}
-	_, err = record.WriteTo(c.Conn)
+	random := make([]byte, 28)
+	sessionID := make([]byte, 32)
+	rand.Read(random)
+	rand.Read(sessionID)
+
+	// handshake, TLS 1.0 version, length
+	mbContainer.Write([]byte{22})
+	mbContainer.Write([]byte{0x03, 0x01})
+	length := uint16(212 + len(payload) + len(c.host))
+	mbContainer.Write([]byte{byte(length >> 8)})
+	mbContainer.Write([]byte{byte(length & 0xff)})
+
+	// clientHello, length, TLS 1.2 version
+	mbContainer.Write([]byte{1})
+	mbContainer.Write([]byte{0})
+	binary.Write(mbContainer, binary.BigEndian, uint16(208+len(payload)+len(c.host)))
+	mbContainer.Write([]byte{0x03, 0x03})
+
+	// random with timestamp, sid len, sid
+	binary.Write(mbContainer, binary.BigEndian, uint32(time.Now().Unix()))
+	mbContainer.Write(random)
+	mbContainer.Write([]byte{32})
+	mbContainer.Write(sessionID)
+
+	// cipher suites
+	mbContainer.Write([]byte{0x00, 0x38})
+	mbContainer.Write([]byte{
+		0xc0, 0x2c, 0xc0, 0x30, 0x00, 0x9f, 0xcc, 0xa9, 0xcc, 0xa8, 0xcc, 0xaa, 0xc0, 0x2b, 0xc0, 0x2f,
+		0x00, 0x9e, 0xc0, 0x24, 0xc0, 0x28, 0x00, 0x6b, 0xc0, 0x23, 0xc0, 0x27, 0x00, 0x67, 0xc0, 0x0a,
+		0xc0, 0x14, 0x00, 0x39, 0xc0, 0x09, 0xc0, 0x13, 0x00, 0x33, 0x00, 0x9d, 0x00, 0x9c, 0x00, 0x3d,
+		0x00, 0x3c, 0x00, 0x35, 0x00, 0x2f, 0x00, 0xff,
+	})
+
+	// compression
+	mbContainer.Write([]byte{0x01, 0x00})
+
+	// extension length
+	binary.Write(mbContainer, binary.BigEndian, uint16(79+len(payload)+len(c.host)))
+
+	// session ticket
+	mbContainer.Write([]byte{0x00, 0x23})
+	binary.Write(mbContainer, binary.BigEndian, uint16(len(payload)))
+	mbContainer.Write(payload)
+
+	// server name
+	mbContainer.Write([]byte{0x00, 0x00})
+	binary.Write(mbContainer, binary.BigEndian, uint16(len(c.host)+5))
+	binary.Write(mbContainer, binary.BigEndian, uint16(len(c.host)+3))
+	mbContainer.Write([]byte{0})
+	binary.Write(mbContainer, binary.BigEndian, uint16(len(c.host)))
+	mbContainer.Write([]byte(c.host))
+
+	// ec_point
+	mbContainer.Write([]byte{0x00, 0x0b, 0x00, 0x04, 0x03, 0x01, 0x00, 0x02})
+
+	// groups
+	mbContainer.Write([]byte{0x00, 0x0a, 0x00, 0x0a, 0x00, 0x08, 0x00, 0x1d, 0x00, 0x17, 0x00, 0x19, 0x00, 0x18})
+
+	// signature
+	mbContainer.Write([]byte{
+		0x00, 0x0d, 0x00, 0x20, 0x00, 0x1e, 0x06, 0x01, 0x06, 0x02, 0x06, 0x03, 0x05,
+		0x01, 0x05, 0x02, 0x05, 0x03, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x03, 0x01,
+		0x03, 0x02, 0x03, 0x03, 0x02, 0x01, 0x02, 0x02, 0x02, 0x03,
+	})
+
+	// encrypt then mac
+	mbContainer.Write([]byte{0x00, 0x16, 0x00, 0x00})
+
+	// extended master secret
+	mbContainer.Write([]byte{0x00, 0x17, 0x00, 0x00})
+
+	clientMsg, _ := buf.ReadAllToBytes(mbContainer)
+	_, err = c.Conn.Write(clientMsg)
 	return
 }
 
 func (c *obfsTLSConn) serverHandshake() (err error) {
-	record := &dissector.Record{}
-	if _, err = record.ReadFrom(c.Conn); err != nil {
+	buffer := buf.New()
+	defer buffer.Release()
+
+	if _, err = buffer.ReadFullFrom(c.Conn, 5); err != nil {
 		return
 	}
-	if record.Type != dissector.Handshake {
-		return dissector.ErrBadType
+	if buffer.Byte(0) != 22 { // not handshake
+		return ErrBadType
 	}
 
-	clientMsg := &dissector.ClientHelloMsg{}
-	if err = clientMsg.Decode(record.Opaque); err != nil {
+	buffer.Clear()
+	if _, err = buffer.ReadFullFrom(c.Conn, 4); err != nil {
 		return
 	}
+	if buffer.Byte(0) != 1 { // not client hello
+		return ErrBadHello
+	}
 
-	sessionID := clientMsg.SessionID
-	for _, ext := range clientMsg.Extensions {
-		if ext.Type() == dissector.ExtSessionTicket {
-			var b []byte
-			b, err = ext.Encode()
-			if err != nil {
-				return
+	length := int(buffer.Byte(1))<<16 | int(buffer.Byte(2))<<8 | int(buffer.Byte(3))
+	b := make([]byte, length)
+	if _, err = io.ReadFull(c.Conn, b); err != nil {
+		return
+	}
+	tlsVer := binary.BigEndian.Uint16(b[:2])
+	if tlsVer < tls.VersionTLS12 {
+		return newError("bad version: only TLSv1.2 is supported")
+	}
+
+	pos := 34
+	sidLen := int(b[pos]) // session id length
+	sessionID := b[pos+1 : pos+sidLen]
+	pos += sidLen + 1
+
+	nlen := int(binary.BigEndian.Uint16(b[pos : pos+2]))
+	pos += nlen + 2 // skip cipher suites
+
+	nlen = int(b[pos])
+	pos += nlen + 1 // skip compression
+
+	nlen = int(binary.BigEndian.Uint16(b[pos : pos+2])) // extensions length
+	pos += 2
+	end := pos + nlen
+	if nlen > 0 {
+		for pos < end {
+			extType := int(binary.BigEndian.Uint16(b[pos : pos+2]))
+			extLength := int(binary.BigEndian.Uint16(b[pos+2 : pos+4]))
+
+			if extType == 0x23 { // session ticket
+				c.rbuf.Write(b[pos+4 : pos+4+extLength])
+				break
 			}
 
-			c.rbuf.Write(b)
-			break
+			pos += 4 + extLength
 		}
 	}
 
@@ -160,7 +217,7 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 		return
 	}
 
-	record = &dissector.Record{
+	record := &dissector.Record{
 		Type:    dissector.Handshake,
 		Version: tls.VersionTLS10,
 		Opaque:  helloMsg,
