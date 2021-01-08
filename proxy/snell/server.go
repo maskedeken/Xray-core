@@ -2,14 +2,17 @@ package snell
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	protocol "github.com/xtls/xray-core/common/protocol"
+	udp_proto "github.com/xtls/xray-core/common/protocol/udp"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/common/task"
@@ -17,6 +20,7 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/udp"
 )
 
 type Server struct {
@@ -85,13 +89,13 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	}
 	inbound.User = s.user
 
-	var dest net.Destination
 	if request.Command == protocol.RequestCommand(CommandUDP) {
-		dest = net.UDPDestination(request.Address, request.Port)
-	} else {
-		dest = net.TCPDestination(request.Address, request.Port)
+		// handle udp request
+		return s.handleUDPPayload(ctx, request, bodyReader, conn, dispatcher)
 	}
 
+	// handle tcp request
+	dest := net.TCPDestination(request.Address, request.Port)
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   conn.RemoteAddr(),
 		To:     dest,
@@ -158,6 +162,73 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	}
 
 	return nil
+}
+
+func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.RequestHeader, clientReader buf.Reader, conn internet.Connection, dispatcher routing.Dispatcher) error {
+	bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
+	clientWriter, err := WriteResponse(request, bufferedWriter)
+	if err != nil {
+		return err
+	}
+
+	buffered := true
+	udpServer := udp.NewDispatcher(dispatcher, func(ctx context.Context, packet *udp_proto.Packet) {
+		udpPayload := packet.Payload
+		udpPayload.UDP = &packet.Source
+		common.Must(clientWriter.WriteMultiBuffer(buf.MultiBuffer{udpPayload}))
+
+		if buffered {
+			buffered = false
+			common.Must(bufferedWriter.SetBuffered(false)) // flush
+		}
+	})
+
+	inbound := session.InboundFromContext(ctx)
+	user := inbound.User
+
+	var dest *net.Destination
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			mb, err := clientReader.ReadMultiBuffer()
+			if err != nil {
+				if errors.Cause(err) != io.EOF {
+					return newError("unexpected EOF").Base(err)
+				}
+				return nil
+			}
+
+			mb2, b := buf.SplitFirst(mb)
+			if b == nil {
+				continue
+			}
+			destination := *b.UDP
+
+			currentPacketCtx := ctx
+			if inbound.Source.IsValid() {
+				currentPacketCtx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
+					From:   inbound.Source,
+					To:     destination,
+					Status: log.AccessAccepted,
+					Reason: "",
+					Email:  user.Email,
+				})
+			}
+			newError("tunnelling request to ", destination).WriteToLog(session.ExportIDToError(ctx))
+
+			if !buf.Cone || dest == nil {
+				dest = &destination
+			}
+
+			udpServer.Dispatch(currentPacketCtx, *dest, b) // first packet
+			for _, payload := range mb2 {
+				udpServer.Dispatch(currentPacketCtx, *dest, payload)
+			}
+		}
+	}
 }
 
 func (s *Server) handleError(user *protocol.MemoryUser, conn internet.Connection, errMsg string) error {

@@ -46,18 +46,16 @@ func WriteRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Writer
 
 	// clientID length & id
 	header.WriteByte(0)
-
 	// host & port
-	header.WriteByte(uint8(len(request.Address.String())))
-	header.WriteString(request.Address.String())
-	binary.Write(header, binary.BigEndian, uint16(request.Port))
+	writeAddressPort(header, request.Address, request.Port)
 
 	if err := w.WriteMultiBuffer(buf.MultiBuffer{header}); err != nil {
 		return nil, newError("failed to write header").Base(err)
 	}
 
 	if cmd == CommandUDP {
-		return NewMultiLengthPacketWriter(w), nil
+		target := net.UDPDestination(request.Address, request.Port)
+		return &PacketWriter{Writer: w, Target: target}, nil
 	}
 
 	return w, nil
@@ -94,7 +92,7 @@ func ReadResponse(user *protocol.MemoryUser, reader io.Reader) (buf.Reader, erro
 			return br, nil
 		}
 
-		return NewLengthPacketReader(br), nil
+		return &PacketReader{Reader: br}, nil
 	default:
 	}
 
@@ -182,22 +180,13 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 		}
 	}
 
-	buffer.Clear()
-	if _, err := buffer.ReadFullFrom(mbContainer, 1); err != nil {
+	addr, port, err := readAddressPort(mbContainer)
+	if err != nil {
 		mbContainer.Close()
 		return nil, nil, err
 	}
-
-	hlen := int32(buffer.Byte(0))
-	buffer.Clear()
-	if _, err := buffer.ReadFullFrom(mbContainer, hlen+2); err != nil {
-		mbContainer.Close()
-		return nil, nil, err
-	}
-	addr := net.ParseAddress(string(buffer.BytesTo(hlen)))
-	port := (int(buffer.Byte(hlen)) << 8) | int(buffer.Byte(hlen+1))
 	request.Address = addr
-	request.Port = net.Port(port)
+	request.Port = port
 
 	br := &buf.BufferedReader{
 		Reader: r,
@@ -205,7 +194,7 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 	}
 
 	if cmd == CommandUDP {
-		return request, NewLengthPacketReader(br), nil
+		return request, &PacketReader{Reader: br}, nil
 	}
 
 	return request, br, nil
@@ -220,16 +209,17 @@ func WriteResponse(request *protocol.RequestHeader, writer io.Writer) (buf.Write
 		return nil, newError("failed to initialize encoding stream").Base(err).AtError()
 	}
 
-	bw := buf.NewBufferedWriter(w)
+	buffer := buf.New()
 	if request.Command == protocol.RequestCommand(CommandUDP) {
-		bw.WriteByte(CommandUDP)
-		bw.SetBuffered(false)
-		return NewMultiLengthPacketWriter(bw), nil
+		target := net.UDPDestination(request.Address, request.Port)
+		buffer.WriteByte(CommandUDP)
+		w.WriteMultiBuffer(buf.MultiBuffer{buffer})
+		return &PacketWriter{Writer: w, Target: target}, nil
 	}
 
-	bw.WriteByte(CommandTunnel)
-	bw.SetBuffered(false)
-	return bw, nil
+	buffer.WriteByte(CommandTunnel)
+	w.WriteMultiBuffer(buf.MultiBuffer{buffer})
+	return w, nil
 }
 
 func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg string) error {
@@ -240,12 +230,12 @@ func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg stri
 		return newError("failed to initialize encoding stream").Base(err).AtError()
 	}
 
-	bw := buf.NewBufferedWriter(w)
-	bw.WriteByte(CommandError)
-	bw.WriteByte(255)                // error code
-	bw.WriteByte(uint8(len(errMsg))) // error message length
-	bw.Write([]byte(errMsg))
-	bw.SetBuffered(false)
+	buffer := buf.New()
+	buffer.WriteByte(CommandError)
+	buffer.WriteByte(255)                // error code
+	buffer.WriteByte(uint8(len(errMsg))) // error message length
+	buffer.WriteString(errMsg)
+	w.WriteMultiBuffer(buf.MultiBuffer{buffer})
 	return nil
 }
 
@@ -274,75 +264,117 @@ func initReader(account *MemoryAccount, reader io.Reader) (buf.Reader, error) {
 	return account.Cipher.NewDecryptionReader(account.PSK, iv, reader)
 }
 
-func NewMultiLengthPacketWriter(writer buf.Writer) *MultiLengthPacketWriter {
-	return &MultiLengthPacketWriter{
-		Writer: writer,
-	}
-}
-
-type MultiLengthPacketWriter struct {
+// PacketWriter UDP Connection Writer Wrapper for snell protocol
+type PacketWriter struct {
 	buf.Writer
+	Target net.Destination
 }
 
-func (w *MultiLengthPacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
-	defer buf.ReleaseMulti(mb)
-	mb2Write := make(buf.MultiBuffer, 0, len(mb)+1)
-	for _, b := range mb {
-		length := b.Len()
-		if length == 0 || length+2 > buf.Size {
-			continue
+// WriteMultiBuffer implements buf.Writer
+func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	for {
+		mb2, b := buf.SplitFirst(mb)
+		mb = mb2
+		if b == nil {
+			break
 		}
-		eb := buf.New()
-		if err := eb.WriteByte(byte(length >> 8)); err != nil {
-			eb.Release()
-			continue
+		target := &w.Target
+		if b.UDP != nil {
+			target = b.UDP
 		}
-		if err := eb.WriteByte(byte(length)); err != nil {
-			eb.Release()
-			continue
+		if _, err := w.writePacket(b.Bytes(), *target); err != nil {
+			buf.ReleaseMulti(mb)
+			return err
 		}
-		if _, err := eb.Write(b.Bytes()); err != nil {
-			eb.Release()
-			continue
-		}
-		mb2Write = append(mb2Write, eb)
 	}
-	if mb2Write.IsEmpty() {
-		return nil
-	}
-	return w.Writer.WriteMultiBuffer(mb2Write)
+	return nil
 }
 
-func NewLengthPacketReader(reader io.Reader) *LengthPacketReader {
-	return &LengthPacketReader{
-		Reader: reader,
-		cache:  make([]byte, 2),
+func (w *PacketWriter) writePacket(payload []byte, dest net.Destination) (int, error) {
+	buffer := buf.New()
+	mb := buf.MultiBuffer{buffer}
+
+	writeAddressPort(buffer, dest.Address, dest.Port)
+	length := len(payload)
+	lengthBuf := [2]byte{}
+	binary.BigEndian.PutUint16(lengthBuf[:], uint16(length))
+	buffer.Write(lengthBuf[:]) // payload length
+
+	err := w.Writer.WriteMultiBuffer(buf.MergeBytes(mb, payload))
+	if err != nil {
+		return 0, err
 	}
+
+	return length, nil
 }
 
-type LengthPacketReader struct {
+// PacketReader is UDP Connection Reader Wrapper for snell protocol
+type PacketReader struct {
 	io.Reader
-	cache []byte
 }
 
-func (r *LengthPacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
-	if _, err := io.ReadFull(r.Reader, r.cache); err != nil { // maybe EOF
-		return nil, newError("failed to read packet length").Base(err)
+// ReadMultiBuffer implements buf.Reader
+func (r *PacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	addr, port, err := readAddressPort(r)
+	if err != nil {
+		return nil, newError("failed to read address and port").Base(err)
 	}
-	length := int32(r.cache[0])<<8 | int32(r.cache[1])
-	// fmt.Println("Read", length)
-	mb := make(buf.MultiBuffer, 0, length/buf.Size+1)
-	for length > 0 {
-		size := length
-		if size > buf.Size {
-			size = buf.Size
+
+	var lengthBuf [2]byte
+	if _, err := io.ReadFull(r, lengthBuf[:]); err != nil {
+		return nil, newError("failed to read payload length").Base(err)
+	}
+
+	remain := int(binary.BigEndian.Uint16(lengthBuf[:]))
+	dest := net.UDPDestination(addr, port)
+	var mb buf.MultiBuffer
+
+	for remain > 0 {
+		length := buf.Size
+		if remain < length {
+			length = remain
 		}
-		length -= size
+
 		b := buf.New()
-		if _, err := b.ReadFullFrom(r.Reader, size); err != nil {
-			return nil, newError("failed to read packet payload").Base(err)
-		}
+		b.UDP = &dest
 		mb = append(mb, b)
+		n, err := b.ReadFullFrom(r, int32(length))
+		if err != nil {
+			buf.ReleaseMulti(mb)
+			return nil, newError("failed to read payload").Base(err)
+		}
+
+		remain -= int(n)
 	}
+
 	return mb, nil
+}
+
+func writeAddressPort(w io.Writer, addr net.Address, port net.Port) (err error) {
+	buffer := buf.New()
+	defer buffer.Release()
+
+	// host & port
+	buffer.WriteByte(uint8(len(addr.String()))) // address length
+	buffer.WriteString(addr.String())
+	binary.Write(buffer, binary.BigEndian, uint16(port))
+	_, err = w.Write(buffer.Bytes())
+	return
+}
+
+func readAddressPort(r io.Reader) (addr net.Address, port net.Port, err error) {
+	buffer := buf.New()
+	defer buffer.Release()
+	if _, err = buffer.ReadFullFrom(r, 1); err != nil {
+		return
+	}
+
+	hlen := int32(buffer.Byte(0))
+	buffer.Clear()
+	if _, err = buffer.ReadFullFrom(r, hlen+2); err != nil {
+		return
+	}
+	addr = net.ParseAddress(string(buffer.BytesTo(hlen)))
+	port = net.Port(binary.BigEndian.Uint16(buffer.BytesRange(hlen, hlen+2)))
+	return
 }
