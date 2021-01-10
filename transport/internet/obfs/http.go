@@ -187,8 +187,8 @@ func (c *obfsHTTPConn) Write(b []byte) (n int, err error) {
 	return c.Conn.Write(b)
 }
 
-// ClientObfsHTTPConn creates a connection for obfs-http client.
-func ClientObfsHTTPConn(conn net.Conn, host string) *obfsHTTPConn {
+// clientObfsHTTPConn creates a connection for obfs-http client.
+func clientObfsHTTPConn(conn net.Conn, host string) *obfsHTTPConn {
 	return &obfsHTTPConn{
 		Conn:       conn,
 		host:       host,
@@ -198,8 +198,8 @@ func ClientObfsHTTPConn(conn net.Conn, host string) *obfsHTTPConn {
 	}
 }
 
-// ServerObfsHTTPConn creates a connection for obfs-http server.
-func ServerObfsHTTPConn(conn net.Conn, host string) *obfsHTTPConn {
+// serverObfsHTTPConn creates a connection for obfs-http server.
+func serverObfsHTTPConn(conn net.Conn, host string) *obfsHTTPConn {
 	return &obfsHTTPConn{
 		Conn:       conn,
 		isServer:   true,

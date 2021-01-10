@@ -8,6 +8,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet"
 )
 
+// Dial implements Transport Dialer
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
 	obfsSettings := streamSettings.ProtocolSettings.(*Config)
 	switch obfsSettings.Type {
@@ -23,9 +24,9 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	}
 
 	if obfsSettings.Type == ObfsType_TLS {
-		return ClientObfsTLSConn(conn, obfsSettings.Host), nil
+		return clientObfsTLSConn(conn, obfsSettings.Host), nil
 	} else {
-		return ClientObfsHTTPConn(conn, obfsSettings.Host), nil
+		return clientObfsHTTPConn(conn, obfsSettings.Host), nil
 	}
 }
 

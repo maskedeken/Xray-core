@@ -9,19 +9,12 @@ import (
 	"sync"
 	"time"
 
-	dissector "github.com/ginuerzh/tls-dissector"
 	"github.com/xtls/xray-core/common/buf"
-	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 )
 
 const (
 	chunkSize = 1 << 14 // 2 ** 14 == 16 * 1024
-)
-
-var (
-	ErrBadType  = errors.New("bad type")
-	ErrBadHello = errors.New("bad hello")
 )
 
 type obfsTLSConn struct {
@@ -146,7 +139,7 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 		return
 	}
 	if buffer.Byte(0) != 22 { // not handshake
-		return ErrBadType
+		return newError("Bad handshake").AtWarning()
 	}
 
 	buffer.Clear()
@@ -154,7 +147,7 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 		return
 	}
 	if buffer.Byte(0) != 1 { // not client hello
-		return ErrBadHello
+		return newError("Bad hello").AtWarning()
 	}
 
 	length := int(buffer.Byte(1))<<16 | int(buffer.Byte(2))<<8 | int(buffer.Byte(3))
@@ -195,44 +188,46 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 		}
 	}
 
-	serverMsg := &dissector.ServerHelloMsg{
-		Version:           tls.VersionTLS12,
-		SessionID:         sessionID,
-		CipherSuite:       0xcca8,
-		CompressionMethod: 0x00,
-		Extensions: []dissector.Extension{
-			&dissector.RenegotiationInfoExtension{},
-			&dissector.ExtendedMasterSecretExtension{},
-			&dissector.ECPointFormatsExtension{
-				Formats: []uint8{0x00},
-			},
-		},
-	}
+	buffer.Clear()
+	random := make([]byte, 28)
+	rand.Read(random)
 
-	var helloMsg []byte
-	serverMsg.Random.Time = uint32(time.Now().Unix())
-	rand.Read(serverMsg.Random.Opaque[:])
-	helloMsg, err = serverMsg.Encode()
-	if err != nil {
-		return
-	}
+	// handshake, TLS 1.0 version
+	buffer.WriteByte(22)
+	buffer.Write([]byte{0x03, 0x01})
+	binary.Write(buffer, binary.BigEndian, uint16(91)) // hello length
 
-	record := &dissector.Record{
-		Type:    dissector.Handshake,
-		Version: tls.VersionTLS10,
-		Opaque:  helloMsg,
-	}
+	buffer.WriteByte(2)              // server hello
+	buffer.Write([]byte{0, 0, 87})   // payload length
+	buffer.Write([]byte{0x03, 0x03}) // tls 1.2
 
-	if _, err = record.WriteTo(c.wbuf); err != nil {
-		return
-	}
+	binary.Write(buffer, binary.BigEndian, uint32(time.Now().Unix()))
+	buffer.Write(random)
 
-	record = &dissector.Record{
-		Type:    dissector.ChangeCipherSpec,
-		Version: tls.VersionTLS12,
-		Opaque:  []byte{0x01},
-	}
-	_, err = record.WriteTo(c.wbuf)
+	buffer.WriteByte(byte(len(sessionID)))
+	buffer.Write(sessionID)
+
+	binary.Write(buffer, binary.BigEndian, uint16(0xcca8)) // cipher suite
+	buffer.WriteByte(0)                                    // compression
+
+	buffer.Write([]byte{0, 15}) // extensions length
+	// RenegotiationInfoExtension
+	binary.Write(buffer, binary.BigEndian, uint16(0xff01))
+	buffer.Write([]byte{0, 0})
+	// ExtendedMasterSecretExtension
+	binary.Write(buffer, binary.BigEndian, uint16(0x17))
+	buffer.Write([]byte{0, 1, 0})
+	// ECPointFormatsExtension
+	binary.Write(buffer, binary.BigEndian, uint16(0x0b))
+	buffer.Write([]byte{0, 0x02})
+	buffer.Write([]byte{0x01, 0x00})
+
+	buffer.WriteByte(20)             // ChangeCipherSpec
+	buffer.Write([]byte{0x03, 0x03}) // tls1.2
+	buffer.Write([]byte{0x00, 0x01}) // length
+	buffer.WriteByte(0x01)
+
+	_, err = c.wbuf.Write(buffer.Bytes())
 	return
 }
 
@@ -242,24 +237,57 @@ func (c *obfsTLSConn) Read(b []byte) (n int, err error) {
 	if c.rbuf.Len() > 0 {
 		return c.rbuf.Read(b)
 	}
-	record := &dissector.Record{}
-	if _, err = record.ReadFrom(c.Conn); err != nil {
+
+	var header [5]byte
+	if _, err = io.ReadFull(c.Conn, header[:1]); err != nil {
 		return
 	}
 
-	if record.Type == dissector.Handshake { // got handshake from server
-		// type + ver + lensize + 1 = 6
-		if _, err = io.CopyN(ioutil.Discard, c.Conn, 6); err != nil {
+	if header[0] == 22 { // got handshake from server
+		// skip all server hello data
+		if _, err = io.CopyN(ioutil.Discard, c.Conn, 101); err != nil {
 			return
 		}
 
-		if _, err = record.ReadFrom(c.Conn); err != nil {
+		if _, err = io.ReadFull(c.Conn, header[:]); err != nil {
 			return
 		}
 	}
 
-	n = copy(b, record.Opaque)
-	_, err = c.rbuf.Write(record.Opaque[n:])
+	if header[0] != 23 {
+		return 0, newError("Non-App data received").AtWarning()
+	}
+
+	remain := int(header[3])<<8 | int(header[4])
+	nlen := len(b)
+	if remain <= nlen {
+		return io.ReadFull(c.Conn, b[:remain])
+	}
+
+	if n, err = io.ReadFull(c.Conn, b[:]); err != nil {
+		return
+	}
+
+	remain -= nlen
+	mb := buf.MultiBuffer{}
+	for remain > 0 {
+		bLen := buf.Size
+		if remain < bLen {
+			bLen = remain
+		}
+
+		buffer := buf.New()
+		mb = append(mb, buffer)
+		nn, err := buffer.ReadFullFrom(c.Conn, int32(bLen))
+		if err != nil {
+			buf.ReleaseMulti(mb)
+			return n, err
+		}
+
+		remain -= int(nn)
+	}
+
+	err = c.rbuf.WriteMultiBuffer(mb)
 	return
 }
 
@@ -280,14 +308,10 @@ func (c *obfsTLSConn) Write(b []byte) (n int, err error) {
 		c.Unlock()
 	}
 
-	record := &dissector.Record{
-		Type:    dissector.AppData,
-		Version: tls.VersionTLS12,
-	}
-
 	if c.wbuf.Len() > 0 {
-		record.Opaque = b
-		record.WriteTo(c.wbuf)
+		c.wbuf.Write([]byte{23, 0x03, 0x03}) // type + version
+		binary.Write(c.wbuf, binary.BigEndian, uint16(len(b)))
+		c.wbuf.Write(b)
 		buffer, _ := buf.ReadAllToBytes(c.wbuf)
 		_, err = c.Conn.Write(buffer)
 		if err != nil {
@@ -303,9 +327,13 @@ func (c *obfsTLSConn) Write(b []byte) (n int, err error) {
 			end = length
 		}
 
-		record.Opaque = b[i:end]
-		nn := len(record.Opaque)
-		if _, err = record.WriteTo(c.Conn); err != nil {
+		data := b[i:end]
+		nn := len(data)
+		c.wbuf.Write([]byte{23, 0x03, 0x03}) // type + version
+		binary.Write(c.wbuf, binary.BigEndian, uint16(nn))
+		c.wbuf.Write(data)
+		buffer, _ := buf.ReadAllToBytes(c.wbuf)
+		if _, err = c.Conn.Write(buffer); err != nil {
 			return
 		}
 
@@ -315,8 +343,8 @@ func (c *obfsTLSConn) Write(b []byte) (n int, err error) {
 	return
 }
 
-// ClientObfsTLSConn creates a connection for obfs-tls client.
-func ClientObfsTLSConn(conn net.Conn, host string) *obfsTLSConn {
+// clientObfsTLSConn creates a connection for obfs-tls client.
+func clientObfsTLSConn(conn net.Conn, host string) *obfsTLSConn {
 	return &obfsTLSConn{
 		Conn:       conn,
 		host:       host,
@@ -326,8 +354,8 @@ func ClientObfsTLSConn(conn net.Conn, host string) *obfsTLSConn {
 	}
 }
 
-// ServerObfsTLSConn creates a connection for obfs-tls server.
-func ServerObfsTLSConn(conn net.Conn, host string) *obfsTLSConn {
+// serverObfsTLSConn creates a connection for obfs-tls server.
+func serverObfsTLSConn(conn net.Conn, host string) *obfsTLSConn {
 	return &obfsTLSConn{
 		Conn:       conn,
 		isServer:   true,
