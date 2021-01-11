@@ -177,11 +177,17 @@ func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.Request
 	udpServer := udp.NewDispatcher(dispatcher, func(ctx context.Context, packet *udp_proto.Packet) {
 		udpPayload := packet.Payload
 		udpPayload.UDP = &packet.Source
-		common.Must(clientWriter.WriteMultiBuffer(buf.MultiBuffer{udpPayload}))
+		var err error
+		if err = clientWriter.WriteMultiBuffer(buf.MultiBuffer{udpPayload}); err != nil {
+			newError("failed to write response").Base(err).AtWarning().WriteToLog()
+			return
+		}
 
 		if buffered {
 			buffered = false
-			common.Must(bufferedWriter.SetBuffered(false)) // flush
+			if err = bufferedWriter.SetBuffered(false); err != nil {
+				newError("failed to flush response").Base(err).AtWarning().WriteToLog()
+			}
 		}
 	})
 
