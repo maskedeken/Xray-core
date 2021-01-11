@@ -179,14 +179,14 @@ func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.Request
 		udpPayload.UDP = &packet.Source
 		var err error
 		if err = clientWriter.WriteMultiBuffer(buf.MultiBuffer{udpPayload}); err != nil {
-			newError("failed to write response").Base(err).AtWarning().WriteToLog()
+			newError("failed to write response").Base(err).AtWarning().WriteToLog(session.ExportIDToError(ctx))
 			return
 		}
 
 		if buffered {
 			buffered = false
 			if err = bufferedWriter.SetBuffered(false); err != nil {
-				newError("failed to flush response").Base(err).AtWarning().WriteToLog()
+				newError("failed to flush response").Base(err).AtWarning().WriteToLog(session.ExportIDToError(ctx))
 			}
 		}
 	})
