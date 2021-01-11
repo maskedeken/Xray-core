@@ -162,7 +162,7 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 
 	pos := 34
 	sidLen := int(b[pos]) // session id length
-	sessionID := b[pos+1 : pos+sidLen]
+	sessionID := b[pos+1 : pos+1+sidLen]
 	pos += sidLen + 1
 
 	nlen := int(binary.BigEndian.Uint16(b[pos : pos+2]))
@@ -239,13 +239,13 @@ func (c *obfsTLSConn) Read(b []byte) (n int, err error) {
 	}
 
 	var header [5]byte
-	if _, err = io.ReadFull(c.Conn, header[:1]); err != nil {
+	if _, err = io.ReadFull(c.Conn, header[:]); err != nil {
 		return
 	}
 
 	if header[0] == 22 { // got handshake from server
 		// skip all server hello data
-		if _, err = io.CopyN(ioutil.Discard, c.Conn, 101); err != nil {
+		if _, err = io.CopyN(ioutil.Discard, c.Conn, 97); err != nil {
 			return
 		}
 
