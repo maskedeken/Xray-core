@@ -60,7 +60,7 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
 			return nil, newError("failed to open mux stream").Base(err)
 		}
 
-		return &muxConnection{Conn: sess.underlayConn, stream: stream}, nil
+		return stream, nil
 	}
 
 	pool.Lock()

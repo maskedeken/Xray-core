@@ -78,8 +78,7 @@ func (h *requestHandler) serveMUX(conn internet.Connection) {
 			return
 		}
 
-		c := &muxConnection{Conn: conn, stream: stream}
-		h.ln.addConn(c)
+		h.ln.addConn(internet.Connection(stream))
 	}
 }
 

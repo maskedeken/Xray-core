@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/serial"
@@ -110,21 +109,4 @@ func (c *connection) SetReadDeadline(t time.Time) error {
 
 func (c *connection) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
-}
-
-type muxConnection struct {
-	net.Conn
-	stream *smux.Stream
-}
-
-func (c *muxConnection) Read(b []byte) (n int, err error) {
-	return c.stream.Read(b)
-}
-
-func (c *muxConnection) Write(b []byte) (n int, err error) {
-	return c.stream.Write(b)
-}
-
-func (c *muxConnection) Close() error {
-	return c.stream.Close()
 }
