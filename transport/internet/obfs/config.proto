@@ -7,9 +7,8 @@ option java_package = "com.xray.transport.internet.obfs";
 option java_multiple_files = true;
 
 enum ObfsType {
-  UNKNOWN = 0;
-  HTTP = 1;
-  TLS = 2;
+  HTTP = 0;
+  TLS = 1;
 }
 
 message Config {

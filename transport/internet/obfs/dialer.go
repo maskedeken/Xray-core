@@ -24,9 +24,9 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	}
 
 	if obfsSettings.Type == ObfsType_TLS {
-		return clientObfsTLSConn(conn, obfsSettings.Host), nil
+		return clientObfsTLSConn(conn, obfsSettings.GetCustomizedHost()), nil
 	} else {
-		return clientObfsHTTPConn(conn, obfsSettings.Host), nil
+		return clientObfsHTTPConn(conn, obfsSettings.GetCustomizedHost()), nil
 	}
 }
 

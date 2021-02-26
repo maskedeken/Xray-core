@@ -1,4 +1,3 @@
-/* Package obfs implements simple-obfs transport */
-package obfs
+package grpc
 
 //go:generate go run github.com/xtls/xray-core/common/errors/errorgen

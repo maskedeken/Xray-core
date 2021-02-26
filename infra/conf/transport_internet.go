@@ -244,16 +244,12 @@ type ObfsConfig struct {
 
 // Build implements Buildable.
 func (c *ObfsConfig) Build() (proto.Message, error) {
-	host := c.Host
-	if host == "" {
-		host = "bing.com"
-	}
 	obfsConfig := &obfs.Config{
-		Host: host,
+		Host: c.Host,
 	}
 
 	switch strings.ToLower(c.Type) {
-	case "http":
+	case "", "http":
 		obfsConfig.Type = obfs.ObfsType_HTTP
 	case "tls":
 		obfsConfig.Type = obfs.ObfsType_TLS
@@ -466,6 +462,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "quic", nil
 	case "obfs":
 		return "obfs", nil
+	case "rpc", "grpc", "gun":
+		return "grpc", nil
 	default:
 		return "", newError("Config: unknown transport protocol: ", p)
 	}
@@ -594,7 +592,7 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 			return nil, newError("Failed to build WebSocket config.").Base(err)
 		}
 
-		if strings.ToLower(string(*c.Network)) == "mws" {
+		if strings.EqualFold(string(*c.Network), "mws") {
 			ts.Mux = true // enable mux
 		}
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
