@@ -10,6 +10,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/tls"
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 )
 
 type Listener struct {
@@ -33,7 +34,13 @@ func (l *Listener) Close() error {
 
 // Tun implements GunServiceServer.Tun()
 func (l *Listener) Tun(srv GunService_TunServer) error {
-	conn := newGunConnection(srv, l.local, nil)
+	var remote net.Addr
+	pr, ok := peer.FromContext(srv.Context())
+	if ok {
+		remote = pr.Addr
+	}
+
+	conn := newGunConnection(srv, l.local, remote)
 	l.handler(conn)
 	<-conn.Done()
 	return nil
