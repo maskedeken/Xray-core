@@ -12,6 +12,7 @@ import (
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 )
 
 var (
@@ -77,7 +78,12 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		return nil, newError("failed to dial to ", dest).Base(err).AtWarning()
 	}
 
-	return newGunConnection(tun, nil, nil), nil
+	var remote net.Addr
+	pr, ok := peer.FromContext(tun.Context())
+	if ok {
+		remote = pr.Addr
+	}
+	return newGunConnection(tun, nil, remote), nil
 }
 
 func init() {
