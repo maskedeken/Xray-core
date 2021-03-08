@@ -172,14 +172,6 @@ func (c *ClientSession) EncodeRequestBody(request *protocol.RequestHeader, write
 			AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
 		}
 		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding)
-	case protocol.SecurityType_SM4_GCM:
-		aead := crypto.NewSm4Gcm(c.requestBodyKey[:])
-		auth := &crypto.AEADAuthenticator{
-			AEAD:                    aead,
-			NonceGenerator:          GenerateChunkNonce(c.requestBodyIV[:], uint32(aead.NonceSize())),
-			AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
-		}
-		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding)
 	case protocol.SecurityType_CHACHA20_POLY1305:
 		aead, err := chacha20poly1305.New(GenerateChacha20Poly1305Key(c.requestBodyKey[:]))
 		common.Must(err)
@@ -314,15 +306,6 @@ func (c *ClientSession) DecodeResponseBody(request *protocol.RequestHeader, read
 		return buf.NewReader(c.responseReader)
 	case protocol.SecurityType_AES128_GCM:
 		aead := crypto.NewAesGcm(c.responseBodyKey[:])
-
-		auth := &crypto.AEADAuthenticator{
-			AEAD:                    aead,
-			NonceGenerator:          GenerateChunkNonce(c.responseBodyIV[:], uint32(aead.NonceSize())),
-			AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
-		}
-		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType(), padding)
-	case protocol.SecurityType_SM4_GCM:
-		aead := crypto.NewSm4Gcm(c.responseBodyKey[:])
 
 		auth := &crypto.AEADAuthenticator{
 			AEAD:                    aead,

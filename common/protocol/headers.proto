@@ -13,7 +13,7 @@ enum SecurityType {
   AES128_GCM = 3;
   CHACHA20_POLY1305 = 4;
   NONE = 5;
-  SM4_GCM = 6;
+  ZERO = 6;
 }
 
 message SecurityConfig {

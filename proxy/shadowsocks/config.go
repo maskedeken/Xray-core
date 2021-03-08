@@ -85,8 +85,6 @@ func (a *Account) getCipher() (Cipher, error) {
 		return &rc4Md5{IVBytes: 6}, nil
 	case CipherType_RC4_MD5:
 		return &rc4Md5{IVBytes: 16}, nil
-	case CipherType_SM4_128_CFB:
-		return &Sm4Cfb{}, nil
 	case CipherType_AES_128_CFB:
 		return &AesCfb{KeyBytes: 16}, nil
 	case CipherType_AES_256_CFB:
@@ -95,12 +93,6 @@ func (a *Account) getCipher() (Cipher, error) {
 		return &ChaCha20{IVBytes: 8}, nil
 	case CipherType_CHACHA20_IETF:
 		return &ChaCha20{IVBytes: 12}, nil
-	case CipherType_SM4_128_GCM:
-		return &AEADCipher{
-			KeyBytes:        16,
-			IVBytes:         16,
-			AEADAuthCreator: crypto.NewSm4Gcm,
-		}, nil
 	case CipherType_AES_128_GCM:
 		return &AEADCipher{
 			KeyBytes:        16,
@@ -208,51 +200,6 @@ func (v *rc4Md5) encrypter(key []byte, iv []byte) cipher.Stream {
 	rc4key := h.Sum(nil)
 	c, _ := rc4.NewCipher(rc4key)
 	return c
-}
-
-// Sm4Cfb represents SM4-CFB ciphers.
-type Sm4Cfb struct{}
-
-func (*Sm4Cfb) IsAEAD() bool {
-	return false
-}
-
-func (v *Sm4Cfb) KeySize() int32 {
-	return 16
-}
-
-func (v *Sm4Cfb) IVSize() int32 {
-	return v.KeySize()
-}
-
-func (v *Sm4Cfb) NewEncryptionWriter(key []byte, iv []byte, writer io.Writer) (buf.Writer, error) {
-	stream := crypto.NewSm4EncryptionStream(key, iv)
-	return &buf.SequentialWriter{Writer: crypto.NewCryptionWriter(stream, writer)}, nil
-}
-
-func (v *Sm4Cfb) NewDecryptionReader(key []byte, iv []byte, reader io.Reader) (buf.Reader, error) {
-	stream := crypto.NewSm4DecryptionStream(key, iv)
-	return &buf.SingleReader{
-		Reader: crypto.NewCryptionReader(stream, reader),
-	}, nil
-}
-
-func (v *Sm4Cfb) EncodePacket(key []byte, b *buf.Buffer) error {
-	iv := b.BytesTo(v.IVSize())
-	stream := crypto.NewSm4EncryptionStream(key, iv)
-	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
-	return nil
-}
-
-func (v *Sm4Cfb) DecodePacket(key []byte, b *buf.Buffer) error {
-	if b.Len() <= v.IVSize() {
-		return newError("insufficient data: ", b.Len())
-	}
-	iv := b.BytesTo(v.IVSize())
-	stream := crypto.NewSm4DecryptionStream(key, iv)
-	stream.XORKeyStream(b.BytesFrom(v.IVSize()), b.BytesFrom(v.IVSize()))
-	b.Advance(v.IVSize())
-	return nil
 }
 
 // AesCfb represents all AES-CFB ciphers.
