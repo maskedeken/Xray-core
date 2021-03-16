@@ -1,8 +1,11 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -53,12 +56,18 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		}
 	}
 
-	c := newConnection(conn, remoteAddr)
+	var extraReader io.Reader
+	if str := request.Header.Get("Sec-WebSocket-Protocol"); str != "" {
+		if ed, err := base64.StdEncoding.DecodeString(str); err == nil && len(ed) > 0 {
+			extraReader = bytes.NewReader(ed)
+		}
+	}
+
+	c := newConnection(conn, remoteAddr, extraReader)
 	if !h.mux {
 		h.ln.addConn(c)
 		return
 	}
-
 	h.serveMUX(c) // handle mux session
 }
 

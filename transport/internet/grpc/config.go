@@ -9,6 +9,6 @@ const protocolName = "grpc"
 
 func init() {
 	common.Must(internet.RegisterProtocolConfigCreator(protocolName, func() interface{} {
-		return nil
+		return new(Config)
 	}))
 }

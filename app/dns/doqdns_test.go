@@ -9,6 +9,7 @@ import (
 	. "github.com/xtls/xray-core/app/dns"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
+	dns_feature "github.com/xtls/xray-core/features/dns"
 )
 
 func TestQUICNameServer(t *testing.T) {
@@ -17,7 +18,7 @@ func TestQUICNameServer(t *testing.T) {
 	s, err := NewQUICNameServer(url, net.IP{})
 	common.Must(err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
-	ips, err := s.QueryIP(ctx, "google.com", IPOption{
+	ips, err := s.QueryIP(ctx, "google.com", dns_feature.IPOption{
 		IPv4Enable: true,
 		IPv6Enable: true,
 	})
