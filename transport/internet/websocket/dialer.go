@@ -127,7 +127,6 @@ func dialConn(ctx context.Context, dest net.Destination, streamSettings *interne
 
 	header := wsSettings.GetRequestHeader()
 	if ed != nil {
-		newError("0-RTT is enabled.").AtWarning().WriteToLog()
 		header.Set("Sec-WebSocket-Protocol", base64.StdEncoding.EncodeToString(ed))
 	}
 
