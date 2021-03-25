@@ -11,6 +11,7 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
@@ -19,7 +20,22 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/xtls"
 )
+
+const (
+	//
+	muxCoolAddress = "v1.mux.cool"
+
+	// XRD is constant for XTLS direct mode
+	XRD = "xtls-rprx-direct"
+	// XRO is constant for XTLS origin mode
+	XRO = "xtls-rprx-origin"
+
+	defaultFlagValue = "NOT_DEFINED_AT_ALL"
+)
+
+var xtls_show bool
 
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
@@ -29,6 +45,11 @@ func init() {
 		})
 		return d, err
 	}))
+
+	xtlsShow := platform.NewEnvFlag("xray.dokodemo.xtls.show").GetValue(func() string { return defaultFlagValue })
+	if xtlsShow == "true" {
+		xtls_show = true
+	}
 }
 
 type DokodemoDoor struct {
@@ -78,6 +99,12 @@ type hasHandshakeAddress interface {
 // Process implements proxy.Inbound.
 func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn internet.Connection, dispatcher routing.Dispatcher) error {
 	newError("processing connection from: ", conn.RemoteAddr()).AtDebug().WriteToLog(session.ExportIDToError(ctx))
+
+	iConn := conn
+	if statConn, ok := iConn.(*internet.StatCouterConnection); ok {
+		iConn = statConn.Connection
+	}
+
 	dest := net.Destination{
 		Network: network,
 		Address: d.address,
@@ -128,6 +155,26 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn in
 	link, err := dispatcher.Dispatch(ctx, dest)
 	if err != nil {
 		return newError("failed to dispatch request").Base(err)
+	}
+
+	if dest.Network == net.Network_TCP {
+		switch d.config.Flow {
+		case XRO, XRD:
+			if dest.Address.Family().IsDomain() && dest.Address.Domain() == muxCoolAddress {
+				return newError(d.config.Flow + " doesn't support Mux").AtWarning()
+			}
+			if xtlsConn, ok := iConn.(*xtls.Conn); ok {
+				xtlsConn.RPRX = true
+				xtlsConn.SHOW = xtls_show
+				xtlsConn.MARK = "XTLS"
+				if d.config.Flow == XRD {
+					xtlsConn.DirectMode = true
+				}
+			} else {
+				return newError(`failed to use ` + d.config.Flow + `, maybe "security" is not "xtls"`).AtWarning()
+			}
+		case "":
+		}
 	}
 
 	requestCount := int32(1)

@@ -2,10 +2,11 @@ package conf
 
 import (
 	"encoding/json"
-	"github.com/xtls/xray-core/transport/internet"
 	"log"
 	"os"
 	"strings"
+
+	"github.com/xtls/xray-core/transport/internet"
 
 	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/app/proxyman"
@@ -221,7 +222,7 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ss.SecurityType == serial.GetMessageType(&xtls.Config{}) && !strings.EqualFold(c.Protocol, "vless") && !strings.EqualFold(c.Protocol, "trojan") {
+		if ss.SecurityType == serial.GetMessageType(&xtls.Config{}) && !strings.EqualFold(c.Protocol, "vless") && !strings.EqualFold(c.Protocol, "trojan") && !strings.EqualFold(c.Protocol, "dokodemo-door") {
 			return nil, newError("XTLS doesn't supports " + c.Protocol + " for now.")
 		}
 		receiverSettings.StreamSettings = ss

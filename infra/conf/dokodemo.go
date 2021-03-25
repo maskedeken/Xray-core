@@ -12,9 +12,16 @@ type DokodemoConfig struct {
 	TimeoutValue uint32       `json:"timeout"`
 	Redirect     bool         `json:"followRedirect"`
 	UserLevel    uint32       `json:"userLevel"`
+	Flow         string       `json:"flow"`
 }
 
 func (v *DokodemoConfig) Build() (proto.Message, error) {
+	switch v.Flow {
+	case "", "xtls-rprx-origin", "xtls-rprx-direct":
+	default:
+		return nil, newError(`Dokodemo: "flow" doesn't support "` + v.Flow)
+	}
+
 	config := new(dokodemo.Config)
 	if v.Host != nil {
 		config.Address = v.Host.Build()
@@ -24,5 +31,6 @@ func (v *DokodemoConfig) Build() (proto.Message, error) {
 	config.Timeout = v.TimeoutValue
 	config.FollowRedirect = v.Redirect
 	config.UserLevel = v.UserLevel
+	config.Flow = v.Flow
 	return config, nil
 }
