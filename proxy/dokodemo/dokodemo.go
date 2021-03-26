@@ -4,11 +4,15 @@ package dokodemo
 
 import (
 	"context"
+	fmt "fmt"
+	"io"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
@@ -19,6 +23,7 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
@@ -101,7 +106,8 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn in
 	newError("processing connection from: ", conn.RemoteAddr()).AtDebug().WriteToLog(session.ExportIDToError(ctx))
 
 	iConn := conn
-	if statConn, ok := iConn.(*internet.StatCouterConnection); ok {
+	statConn, ok := iConn.(*internet.StatCouterConnection)
+	if ok {
 		iConn = statConn.Connection
 	}
 
@@ -157,6 +163,7 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn in
 		return newError("failed to dispatch request").Base(err)
 	}
 
+	var rawConn syscall.RawConn
 	if dest.Network == net.Network_TCP {
 		switch d.config.Flow {
 		case XRO, XRD:
@@ -169,6 +176,9 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn in
 				xtlsConn.MARK = "XTLS"
 				if d.config.Flow == XRD {
 					xtlsConn.DirectMode = true
+					if sc, ok := xtlsConn.Connection.(syscall.Conn); ok {
+						rawConn, _ = sc.SyscallConn()
+					}
 				}
 			} else {
 				return newError(`failed to use ` + d.config.Flow + `, maybe "security" is not "xtls"`).AtWarning()
@@ -191,7 +201,19 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn in
 		} else {
 			reader = buf.NewReader(conn)
 		}
-		if err := buf.Copy(reader, link.Writer, buf.UpdateActivity(timer)); err != nil {
+
+		var err error
+		if rawConn != nil {
+			var counter stats.Counter
+			if statConn != nil {
+				counter = statConn.ReadCounter
+			}
+			err = readV(reader, link.Writer, timer, iConn.(*xtls.Conn), rawConn, counter)
+		} else {
+			err = buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
+		}
+
+		if err != nil {
 			return newError("failed to transport request").Base(err)
 		}
 
@@ -354,6 +376,37 @@ func (w *PacketWriter) Close() error {
 		if conn != nil {
 			conn.Close()
 		}
+	}
+	return nil
+}
+
+func readV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, conn *xtls.Conn, rawConn syscall.RawConn, counter stats.Counter) error {
+	err := func() error {
+		for {
+			if conn.DirectIn {
+				conn.DirectIn = false
+				reader = buf.NewReadVReader(conn.Connection, rawConn)
+				if conn.SHOW {
+					fmt.Println(conn.MARK, "ReadV")
+				}
+			}
+			buffer, err := reader.ReadMultiBuffer()
+			if !buffer.IsEmpty() {
+				if counter != nil {
+					counter.Add(int64(buffer.Len()))
+				}
+				timer.Update()
+				if werr := writer.WriteMultiBuffer(buffer); werr != nil {
+					return werr
+				}
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}()
+	if err != nil && errors.Cause(err) != io.EOF {
+		return err
 	}
 	return nil
 }
