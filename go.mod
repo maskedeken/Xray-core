@@ -13,8 +13,8 @@ require (
 	github.com/pelletier/go-toml v1.8.1
 	github.com/pires/go-proxyproto v0.5.0
 	github.com/seiflotfy/cuckoofilter v0.0.0-20201222105146-bc6005554a0c
-	github.com/xtaci/smux v1.5.15
 	github.com/stretchr/testify v1.7.0
+	github.com/xtaci/smux v1.5.15
 	github.com/xtls/go v0.0.0-20201118062508-3632bf3b7499
 	go.starlark.net v0.0.0-20210312235212-74c10e2c17dc
 	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
@@ -24,5 +24,4 @@ require (
 	google.golang.org/grpc v1.36.0
 	google.golang.org/protobuf v1.25.0
 	h12.io/socks v1.0.2
-	v2ray.com/core v4.19.1+incompatible
 )
