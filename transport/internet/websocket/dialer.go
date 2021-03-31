@@ -17,18 +17,23 @@ import (
 	"github.com/xtls/xray-core/transport/internet/tls"
 )
 
+type dialerConf struct {
+	net.Destination
+	streamSettings *internet.MemoryStreamConfig
+}
+
 type muxSession struct {
-	addr         string
+	conf         dialerConf
 	client       *smux.Session
 	underlayConn net.Conn
 }
 
 type muxPool struct {
 	sync.Mutex
-	sessions map[string]*muxSession
+	sessions map[dialerConf]*muxSession
 }
 
-var pool = muxPool{sessions: make(map[string]*muxSession)}
+var pool = muxPool{sessions: make(map[dialerConf]*muxSession)}
 
 // Dial dials a WebSocket connection to the given destination.
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
@@ -45,7 +50,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		if err != nil {
 			sess.underlayConn.Close()
 			sess.client.Close()
-			delete(pool.sessions, sess.addr)
+			delete(pool.sessions, sess.conf)
 			return nil, newError("failed to open mux stream").Base(err)
 		}
 
@@ -54,8 +59,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 
 	pool.Lock()
 	defer pool.Unlock()
-	host := dest.Address.String()
-	sess, ok := pool.sessions[host]
+	conf := dialerConf{dest, streamSettings}
+	sess, ok := pool.sessions[conf]
 	if ok && !sess.client.IsClosed() {
 		return createNewMuxConn(sess)
 	}
@@ -71,8 +76,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		return nil, newError("failed to create mux session").Base(err)
 	}
 
-	sess = &muxSession{addr: host, client: client, underlayConn: conn}
-	pool.sessions[host] = sess
+	sess = &muxSession{conf: conf, client: client, underlayConn: conn}
+	pool.sessions[conf] = sess
 	return createNewMuxConn(sess)
 }
 
