@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,8 @@ type requestHandler struct {
 	mux  bool
 }
 
+var replacer = strings.NewReplacer("+", "-", "/", "_", "=", "")
+
 var upgrader = &websocket.Upgrader{
 	ReadBufferSize:   4 * 1024,
 	WriteBufferSize:  4 * 1024,
@@ -41,7 +44,17 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		writer.WriteHeader(http.StatusNotFound)
 		return
 	}
-	conn, err := upgrader.Upgrade(writer, request, nil)
+
+	var extraReader io.Reader
+	var responseHeader = http.Header{}
+	if str := request.Header.Get("Sec-WebSocket-Protocol"); str != "" {
+		if ed, err := base64.RawURLEncoding.DecodeString(replacer.Replace(str)); err == nil && len(ed) > 0 {
+			extraReader = bytes.NewReader(ed)
+			responseHeader.Set("Sec-WebSocket-Protocol", str)
+		}
+	}
+
+	conn, err := upgrader.Upgrade(writer, request, responseHeader)
 	if err != nil {
 		newError("failed to convert to WebSocket connection").Base(err).WriteToLog()
 		return
@@ -53,13 +66,6 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		remoteAddr = &net.TCPAddr{
 			IP:   forwardedAddrs[0].IP(),
 			Port: int(0),
-		}
-	}
-
-	var extraReader io.Reader
-	if str := request.Header.Get("Sec-WebSocket-Protocol"); str != "" {
-		if ed, err := base64.StdEncoding.DecodeString(str); err == nil && len(ed) > 0 {
-			extraReader = bytes.NewReader(ed)
 		}
 	}
 
@@ -110,7 +116,8 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		if streamSettings.SocketSettings == nil {
 			streamSettings.SocketSettings = &internet.SocketConfig{}
 		}
-		streamSettings.SocketSettings.AcceptProxyProtocol = l.config.AcceptProxyProtocol
+		streamSettings.SocketSettings.AcceptProxyProtocol =
+			l.config.AcceptProxyProtocol || streamSettings.SocketSettings.AcceptProxyProtocol
 	}
 	var listener net.Listener
 	var err error
@@ -157,7 +164,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 			mux:  wsSettings.Mux,
 		},
 		ReadHeaderTimeout: time.Second * 4,
-		MaxHeaderBytes:    2048,
+		MaxHeaderBytes:    4096,
 	}
 
 	go func() {

@@ -5,11 +5,11 @@ import (
 	"io"
 	"net"
 
+	"google.golang.org/grpc/peer"
+
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net/cnc"
 	"github.com/xtls/xray-core/common/signal/done"
-
-	"google.golang.org/grpc/peer"
 )
 
 type HunkConn interface {
@@ -100,7 +100,7 @@ func (h *HunkReaderWriter) ReadMultiBuffer() (buf.MultiBuffer, error) {
 		}
 	}
 
-	if cap(h.buf) == buf.Size {
+	if cap(h.buf) >= buf.Size {
 		b := h.buf
 		h.index = len(h.buf)
 		return buf.MultiBuffer{buf.NewExisted(b)}, nil
