@@ -25,8 +25,6 @@ import (
 // by selecting the ALPN token "dq" in the crypto handshake.
 const NextProtoDQ = "doq-i00"
 
-const handshakeIdleTimeout = time.Second * 8
-
 // QUICNameServer implemented DNS over QUIC
 type QUICNameServer struct {
 	sync.RWMutex
@@ -362,7 +360,7 @@ func (s *QUICNameServer) getSession() (quic.Session, error) {
 func (s *QUICNameServer) openSession() (quic.Session, error) {
 	tlsConfig := tls.Config{}
 	quicConfig := &quic.Config{
-		HandshakeIdleTimeout: handshakeIdleTimeout,
+		KeepAlive: true,
 	}
 
 	session, err := quic.DialAddrContext(context.Background(), s.destination.NetAddr(), tlsConfig.GetTLSConfig(tls.WithNextProto("http/1.1", http2.NextProtoTLS, NextProtoDQ)), quicConfig)
