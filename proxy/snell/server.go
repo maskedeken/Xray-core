@@ -60,29 +60,43 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	sessionPolicy := s.policyManager.ForLevel(s.user.Level)
 	conn.SetReadDeadline(time.Now().Add(sessionPolicy.Timeouts.Handshake))
 
-	bufferedReader := buf.BufferedReader{Reader: buf.NewReader(conn)}
-	request, bodyReader, err := ReadRequest(s.user, &bufferedReader)
+	account := s.user.Account.(*MemoryAccount)
+	bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
+	encryptWriter, err := account.NewEncryptionWriter(bufferedWriter)
 	if err != nil {
-		log.Record(&log.AccessMessage{
-			From:   conn.RemoteAddr(),
-			To:     "",
-			Status: log.AccessRejected,
-			Reason: err,
-		})
+		return s.handleError(conn, newError("failed to initialize encoding stream").Base(err).AtError())
+	}
 
+	decryptReader, err := account.NewDecryptionReader(&buf.BufferedReader{
+		Reader: buf.NewReader(conn),
+	})
+	if err != nil {
+		return s.handleError(conn, newError("failed to initialize decoding stream").Base(err).AtError())
+	}
+
+	request, reqeustReader, err := ReadRequest(decryptReader)
+	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "snell") {
-			return s.handleError(s.user, conn, errStr)
+			if err := WriteErrorResponse(encryptWriter, errStr); err != nil {
+				return newError("failed to write response").Base(err)
+			}
+
+			return bufferedWriter.SetBuffered(false)
 		}
 
-		return newError("failed to create request from: ", conn.RemoteAddr()).Base(err)
+		return s.handleError(conn, err)
 	}
 
 	conn.SetReadDeadline(time.Time{})
 
 	if request.Command == protocol.RequestCommand(CommandPing) { // reponse pong if got ping
-		conn.Write([]byte{CommandPong})
-		return nil
+		err := encryptWriter.WriteMultiBuffer(buf.MultiBuffer{buf.NewExisted([]byte{CommandPong})})
+		if err != nil {
+			return newError("failed to write response").Base(err)
+		}
+
+		return bufferedWriter.SetBuffered(false)
 	}
 
 	inbound := session.InboundFromContext(ctx)
@@ -93,7 +107,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 
 	if request.Command == protocol.RequestCommand(CommandUDP) {
 		// handle udp request
-		return s.handleUDPPayload(ctx, request, bodyReader, conn, dispatcher)
+		return s.handleUDPPayload(ctx, request, reqeustReader, encryptWriter, bufferedWriter, dispatcher)
 	}
 
 	// handle tcp request
@@ -103,7 +117,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 		To:     dest,
 		Status: log.AccessAccepted,
 		Reason: "",
-		Email:  request.User.Email,
+		Email:  s.user.Email,
 	})
 	newError("tunnelling request to ", dest).WriteToLog(session.ExportIDToError(ctx))
 
@@ -119,8 +133,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	responseDone := func() error {
 		defer timer.SetTimeout(sessionPolicy.Timeouts.UplinkOnly)
 
-		bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
-		responseWriter, err := WriteResponse(request, bufferedWriter)
+		responseWriter, err := WriteResponse(request, encryptWriter)
 		if err != nil {
 			return newError("failed to write response").Base(err)
 		}
@@ -149,7 +162,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	requestDone := func() error {
 		defer timer.SetTimeout(sessionPolicy.Timeouts.DownlinkOnly)
 
-		if err := buf.Copy(bodyReader, link.Writer, buf.UpdateActivity(timer)); err != nil {
+		if err := buf.Copy(reqeustReader, link.Writer, buf.UpdateActivity(timer)); err != nil {
 			return newError("failed to transport all TCP request").Base(err)
 		}
 
@@ -166,9 +179,8 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	return nil
 }
 
-func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.RequestHeader, clientReader buf.Reader, conn internet.Connection, dispatcher routing.Dispatcher) error {
-	bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
-	clientWriter, err := WriteResponse(request, bufferedWriter)
+func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.RequestHeader, clientReader buf.Reader, clientWriter buf.Writer, bufferedWriter *buf.BufferedWriter, dispatcher routing.Dispatcher) error {
+	clientWriter, err := WriteResponse(request, clientWriter)
 	if err != nil {
 		return err
 	}
@@ -239,8 +251,15 @@ func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.Request
 	}
 }
 
-func (s *Server) handleError(user *protocol.MemoryUser, conn internet.Connection, errMsg string) error {
-	return WriteErrorResponse(user, conn, errMsg)
+func (s *Server) handleError(conn internet.Connection, err error) error {
+	log.Record(&log.AccessMessage{
+		From:   conn.RemoteAddr(),
+		To:     "",
+		Status: log.AccessRejected,
+		Reason: err,
+	})
+
+	return newError("failed to create request from: ", conn.RemoteAddr()).Base(err)
 }
 
 func init() {

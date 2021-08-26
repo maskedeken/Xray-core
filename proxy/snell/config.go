@@ -2,7 +2,7 @@ package snell
 
 import (
 	"bytes"
-	"crypto/cipher"
+	"crypto/rand"
 	"io"
 
 	"github.com/xtls/xray-core/common"
@@ -30,9 +30,8 @@ func (a *MemoryAccount) Equals(another protocol.Account) bool {
 // AsAccount implements protocol.AsAccount.
 func (a *Account) AsAccount() (protocol.Account, error) {
 	cipher := &SnellCipher{
-		KeyBytes:        32,
-		IVBytes:         16,
-		AEADAuthCreator: createChacha20Poly1305,
+		KeyBytes: 32,
+		IVBytes:  16,
 	}
 
 	return &MemoryAccount{
@@ -41,20 +40,34 @@ func (a *Account) AsAccount() (protocol.Account, error) {
 	}, nil
 }
 
-func createChacha20Poly1305(key []byte) cipher.AEAD {
-	chacha20, err := chacha20poly1305.New(key)
-	common.Must(err)
-	return chacha20
+func (a *MemoryAccount) NewEncryptionWriter(writer io.Writer) (buf.Writer, error) {
+	var iv []byte
+	if a.Cipher.IVSize() > 0 {
+		iv = make([]byte, a.Cipher.IVSize())
+		common.Must2(rand.Read(iv))
+		if err := buf.WriteAllBytes(writer, iv); err != nil {
+			return nil, newError("failed to write IV.").Base(err)
+		}
+	}
+
+	return a.Cipher.NewEncryptionWriter(a.PSK, iv, writer)
+}
+
+func (a *MemoryAccount) NewDecryptionReader(reader io.Reader) (buf.Reader, error) {
+	var iv []byte
+	if a.Cipher.IVSize() > 0 {
+		iv = make([]byte, a.Cipher.IVSize())
+		if _, err := io.ReadFull(reader, iv); err != nil {
+			return nil, newError("failed to read IV").Base(err)
+		}
+	}
+
+	return a.Cipher.NewDecryptionReader(a.PSK, iv, reader)
 }
 
 type SnellCipher struct {
-	KeyBytes        int32
-	IVBytes         int32
-	AEADAuthCreator func(key []byte) cipher.AEAD
-}
-
-func (*SnellCipher) IsAEAD() bool {
-	return true
+	KeyBytes int32
+	IVBytes  int32
 }
 
 func (c *SnellCipher) KeySize() int32 {
@@ -65,25 +78,37 @@ func (c *SnellCipher) IVSize() int32 {
 	return c.IVBytes
 }
 
-func (c *SnellCipher) createAuthenticator(key []byte, iv []byte) *crypto.AEADAuthenticator {
+func (c *SnellCipher) createAuthenticator(key []byte, iv []byte) (*crypto.AEADAuthenticator, error) {
 	subkey := snellKDF(key, iv, c.KeySize())
-	aead := c.AEADAuthCreator(subkey)
+	aead, err := chacha20poly1305.New(subkey)
+	if err != nil {
+		return nil, err
+	}
+
 	nonce := crypto.GenerateAEADNonceWithSize(aead.NonceSize())
 	return &crypto.AEADAuthenticator{
 		AEAD:           aead,
 		NonceGenerator: nonce,
-	}
+	}, nil
 }
 
 func (c *SnellCipher) NewEncryptionWriter(key []byte, iv []byte, writer io.Writer) (buf.Writer, error) {
-	auth := c.createAuthenticator(key, iv)
+	auth, err := c.createAuthenticator(key, iv)
+	if err != nil {
+		return nil, err
+	}
+
 	return crypto.NewAuthenticationWriter(auth, &crypto.AEADChunkSizeParser{
 		Auth: auth,
 	}, writer, protocol.TransferTypeStream, nil), nil
 }
 
 func (c *SnellCipher) NewDecryptionReader(key []byte, iv []byte, reader io.Reader) (buf.Reader, error) {
-	auth := c.createAuthenticator(key, iv)
+	auth, err := c.createAuthenticator(key, iv)
+	if err != nil {
+		return nil, err
+	}
+
 	return crypto.NewAuthenticationReader(auth, &crypto.AEADChunkSizeParser{
 		Auth: auth,
 	}, reader, protocol.TransferTypeStream, nil), nil

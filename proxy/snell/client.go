@@ -81,7 +81,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	defer conn.Close()
 
 	user := server.PickUser()
-	_, ok := user.Account.(*MemoryAccount)
+	account, ok := user.Account.(*MemoryAccount)
 	if !ok {
 		return newError("user account is not valid")
 	}
@@ -98,7 +98,12 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, sessionPolicy.Timeouts.ConnectionIdle)
 	bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
-	bodyWriter, err := WriteRequest(request, bufferedWriter)
+	encryptWriter, err := account.NewEncryptionWriter(bufferedWriter)
+	if err != nil {
+		return newError("failed to initialize encoding stream").Base(err).AtError()
+	}
+
+	bodyWriter, err := WriteRequest(request, encryptWriter)
 	if err != nil {
 		return newError("failed to write request").Base(err)
 	}
@@ -122,7 +127,14 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	responseDone := func() error {
 		defer timer.SetTimeout(sessionPolicy.Timeouts.UplinkOnly)
 
-		responseReader, err := ReadResponse(user, conn)
+		decryptReader, err := account.NewDecryptionReader(&buf.BufferedReader{
+			Reader: buf.NewReader(conn),
+		})
+		if err != nil {
+			return newError("failed to initialize decoding stream").Base(err).AtError()
+		}
+
+		responseReader, err := ReadResponse(decryptReader)
 		if err != nil {
 			return err
 		}

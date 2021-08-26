@@ -1,12 +1,10 @@
 package snell
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"io"
 	"io/ioutil"
 
-	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
 	protocol "github.com/xtls/xray-core/common/protocol"
@@ -28,15 +26,7 @@ const (
 )
 
 // WriteTCPRequest writes Snell request into the given writer, and returns a writer for body.
-func WriteRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Writer, error) {
-	user := request.User
-	account := user.Account.(*MemoryAccount)
-
-	w, err := initWriter(account, writer)
-	if err != nil {
-		return nil, newError("failed to create encoding stream").Base(err).AtError()
-	}
-
+func WriteRequest(request *protocol.RequestHeader, w buf.Writer) (buf.Writer, error) {
 	header := buf.New()
 	defer header.Release()
 
@@ -61,14 +51,7 @@ func WriteRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Writer
 	return w, nil
 }
 
-func ReadResponse(user *protocol.MemoryUser, reader io.Reader) (buf.Reader, error) {
-	account := user.Account.(*MemoryAccount)
-
-	r, err := initReader(account, reader)
-	if err != nil {
-		return nil, newError("failed to initialize decoding stream").Base(err).AtError()
-	}
-
+func ReadResponse(r buf.Reader) (buf.Reader, error) {
 	mb, err := r.ReadMultiBuffer()
 	if err != nil {
 		return nil, err
@@ -124,37 +107,33 @@ func ReadResponse(user *protocol.MemoryUser, reader io.Reader) (buf.Reader, erro
 }
 
 // ReadRequest reads a Snell TCP session from the given reader, returns its header and remaining parts.
-func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.RequestHeader, buf.Reader, error) {
-	account := user.Account.(*MemoryAccount)
-
-	buffer := buf.New()
-	defer buffer.Release()
-
-	r, err := initReader(account, reader)
-	if err != nil {
-		return nil, nil, newError("failed to initialize decoding stream").Base(err).AtError()
-	}
-
+func ReadRequest(r buf.Reader) (*protocol.RequestHeader, buf.Reader, error) {
 	mb, err := r.ReadMultiBuffer()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	buffer.Clear()
+	var buffer [3]byte
+
 	mbContainer := &buf.MultiBufferContainer{MultiBuffer: mb}
-	if _, err := buffer.ReadFullFrom(mbContainer, 3); err != nil {
+	n, err := mbContainer.Read(buffer[:])
+	if err != nil {
 		return nil, nil, err
 	}
 
-	switch buffer.Byte(0) {
+	if n < 2 {
+		mbContainer.Close()
+		return nil, nil, newError("invalid snell protocol")
+	}
+
+	switch buffer[0] {
 	case Version:
 	default:
 		mbContainer.Close()
 		return nil, nil, newError("invalid snell version")
 	}
 
-	cmd := buffer.Byte(1)   // command
-	idLen := buffer.Byte(2) // user id length
+	cmd := buffer[1] // command
 	switch cmd {
 	case CommandPing, CommandConnect, CommandUDP:
 	default:
@@ -164,7 +143,6 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 
 	request := &protocol.RequestHeader{
 		Version: Version,
-		User:    user,
 		Command: protocol.RequestCommand(cmd),
 	}
 
@@ -173,6 +151,7 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 		return request, nil, nil
 	}
 
+	idLen := buffer[2] // user id length
 	if idLen > 0 {
 		if _, err := io.CopyN(ioutil.Discard, mbContainer, int64(idLen)); err != nil { // just discard user id
 			mbContainer.Close()
@@ -200,15 +179,7 @@ func ReadRequest(user *protocol.MemoryUser, reader io.Reader) (*protocol.Request
 	return request, br, nil
 }
 
-func WriteResponse(request *protocol.RequestHeader, writer io.Writer) (buf.Writer, error) {
-	user := request.User
-	account := user.Account.(*MemoryAccount)
-
-	w, err := initWriter(account, writer)
-	if err != nil {
-		return nil, newError("failed to initialize encoding stream").Base(err).AtError()
-	}
-
+func WriteResponse(request *protocol.RequestHeader, w buf.Writer) (buf.Writer, error) {
 	buffer := buf.New()
 	if request.Command == protocol.RequestCommand(CommandUDP) {
 		target := net.UDPDestination(request.Address, request.Port)
@@ -222,46 +193,13 @@ func WriteResponse(request *protocol.RequestHeader, writer io.Writer) (buf.Write
 	return w, nil
 }
 
-func WriteErrorResponse(user *protocol.MemoryUser, writer io.Writer, errMsg string) error {
-	account := user.Account.(*MemoryAccount)
-
-	w, err := initWriter(account, writer)
-	if err != nil {
-		return newError("failed to initialize encoding stream").Base(err).AtError()
-	}
-
+func WriteErrorResponse(w buf.Writer, errMsg string) error {
 	buffer := buf.New()
 	buffer.WriteByte(CommandError)
 	buffer.WriteByte(255)                // error code
 	buffer.WriteByte(uint8(len(errMsg))) // error message length
 	buffer.WriteString(errMsg)
-	w.WriteMultiBuffer(buf.MultiBuffer{buffer})
-	return nil
-}
-
-func initWriter(account *MemoryAccount, writer io.Writer) (buf.Writer, error) {
-	var iv []byte
-	if account.Cipher.IVSize() > 0 {
-		iv = make([]byte, account.Cipher.IVSize())
-		common.Must2(rand.Read(iv))
-		if err := buf.WriteAllBytes(writer, iv); err != nil {
-			return nil, newError("failed to write IV.").Base(err)
-		}
-	}
-
-	return account.Cipher.NewEncryptionWriter(account.PSK, iv, writer)
-}
-
-func initReader(account *MemoryAccount, reader io.Reader) (buf.Reader, error) {
-	var iv []byte
-	if account.Cipher.IVSize() > 0 {
-		iv = make([]byte, account.Cipher.IVSize())
-		if _, err := io.ReadFull(reader, iv); err != nil {
-			return nil, newError("failed to read IV").Base(err)
-		}
-	}
-
-	return account.Cipher.NewDecryptionReader(account.PSK, iv, reader)
+	return w.WriteMultiBuffer(buf.MultiBuffer{buffer})
 }
 
 // PacketWriter UDP Connection Writer Wrapper for snell protocol
