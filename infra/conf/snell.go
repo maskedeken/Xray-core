@@ -36,7 +36,7 @@ func (c *SnellClientConfig) Build() (proto.Message, error) {
 			return nil, newError("Snell server address is not set.")
 		}
 		if rec.Port == 0 {
-			return nil, newError("Invalid Snell port.")
+			return nil, newError("Invalid snell port.")
 		}
 		if rec.Password == "" {
 			return nil, newError("Snell password is not specified.")
@@ -74,6 +74,10 @@ type SnellServerConfig struct {
 
 // Build implements Buildable
 func (c *SnellServerConfig) Build() (proto.Message, error) {
+	if c.Password == "" {
+		return nil, newError("Snell password is not specified.")
+	}
+
 	config := new(snell.ServerConfig)
 	user := new(protocol.User)
 	account := &snell.Account{

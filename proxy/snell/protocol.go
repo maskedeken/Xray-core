@@ -193,15 +193,6 @@ func WriteResponse(request *protocol.RequestHeader, w buf.Writer) (buf.Writer, e
 	return w, nil
 }
 
-func WriteErrorResponse(w buf.Writer, errMsg string) error {
-	buffer := buf.New()
-	buffer.WriteByte(CommandError)
-	buffer.WriteByte(255)                // error code
-	buffer.WriteByte(uint8(len(errMsg))) // error message length
-	buffer.WriteString(errMsg)
-	return w.WriteMultiBuffer(buf.MultiBuffer{buffer})
-}
-
 // PacketWriter UDP Connection Writer Wrapper for snell protocol
 type PacketWriter struct {
 	buf.Writer

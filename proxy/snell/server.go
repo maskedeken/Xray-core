@@ -3,7 +3,6 @@ package snell
 import (
 	"context"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/xtls/xray-core/common"
@@ -64,31 +63,27 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 	bufferedWriter := buf.NewBufferedWriter(buf.NewWriter(conn))
 	encryptWriter, err := account.NewEncryptionWriter(bufferedWriter)
 	if err != nil {
-		return s.handleError(conn, newError("failed to initialize encoding stream").Base(err).AtError())
+		return newError("failed to initialize encoding stream").Base(err)
 	}
 
 	decryptReader, err := account.NewDecryptionReader(&buf.BufferedReader{
 		Reader: buf.NewReader(conn),
 	})
 	if err != nil {
-		return s.handleError(conn, newError("failed to initialize decoding stream").Base(err).AtError())
+		return newError("failed to initialize decoding stream").Base(err)
 	}
 
 	request, reqeustReader, err := ReadRequest(decryptReader)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "snell") {
-			if err := WriteErrorResponse(encryptWriter, errStr); err != nil {
-				return newError("failed to write response").Base(err)
-			}
+		log.Record(&log.AccessMessage{
+			From:   conn.RemoteAddr(),
+			To:     "",
+			Status: log.AccessRejected,
+			Reason: err,
+		})
 
-			return bufferedWriter.SetBuffered(false)
-		}
-
-		return s.handleError(conn, err)
+		return newError("failed to create request from: ", conn.RemoteAddr()).Base(err)
 	}
-
-	conn.SetReadDeadline(time.Time{})
 
 	if request.Command == protocol.RequestCommand(CommandPing) { // reponse pong if got ping
 		err := encryptWriter.WriteMultiBuffer(buf.MultiBuffer{buf.NewExisted([]byte{CommandPong})})
@@ -98,6 +93,8 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn internet
 
 		return bufferedWriter.SetBuffered(false)
 	}
+
+	conn.SetReadDeadline(time.Time{})
 
 	inbound := session.InboundFromContext(ctx)
 	if inbound == nil {
@@ -249,17 +246,6 @@ func (s *Server) handleUDPPayload(ctx context.Context, request *protocol.Request
 			}
 		}
 	}
-}
-
-func (s *Server) handleError(conn internet.Connection, err error) error {
-	log.Record(&log.AccessMessage{
-		From:   conn.RemoteAddr(),
-		To:     "",
-		Status: log.AccessRejected,
-		Reason: err,
-	})
-
-	return newError("failed to create request from: ", conn.RemoteAddr()).Base(err)
 }
 
 func init() {
