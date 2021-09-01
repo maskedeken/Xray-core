@@ -82,7 +82,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 
 			go func() {
 				if obfsSettings.Type == ObfsType_TLS {
-					fakeTLSConn := serverObfsTLSConn(conn, obfsSettings.GetCustomizedHost())
+					fakeTLSConn := serverObfsTLSConn(conn, obfsSettings.Host)
 					if err := fakeTLSConn.Handshake(nil); err != nil {
 						newError("failed to perform tls handshake with ", conn.RemoteAddr().String()).Base(err).AtWarning().WriteToLog()
 						return
@@ -92,7 +92,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 					return
 				}
 
-				fakeHTTPConn := serverObfsHTTPConn(conn, obfsSettings.GetCustomizedHost())
+				fakeHTTPConn := serverObfsHTTPConn(conn, obfsSettings.Host)
 				if err := fakeHTTPConn.Handshake(); err != nil {
 					newError("failed to perform http handshake with ", conn.RemoteAddr().String()).Base(err).AtWarning().WriteToLog()
 					return

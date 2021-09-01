@@ -66,6 +66,16 @@ func (c *obfsHTTPConn) serverHandshake() (err error) {
 	b := buf.New()
 	defer b.Release()
 
+	if c.host != "" && r.Host != c.host {
+		b.WriteString("HTTP/1.1 404 Not Found\r\n")
+		b.WriteString("Content-Length: 0\r\n")
+		b.WriteString("Date: " + time.Now().Format(time.RFC1123) + "\r\n")
+		b.WriteString("\r\n")
+
+		c.Conn.Write(b.Bytes())
+		return newError("invalid host name: ", r.Host)
+	}
+
 	if r.Method != http.MethodGet || r.Header.Get("Upgrade") != "websocket" {
 		b.WriteString("HTTP/1.1 503 Service Unavailable\r\n")
 		b.WriteString("Content-Length: 0\r\n")

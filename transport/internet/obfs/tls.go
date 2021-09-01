@@ -17,6 +17,8 @@ const (
 	chunkSize = 1 << 14 // 2 ** 14 == 16 * 1024
 )
 
+var ErrShortBuffer = newError("short buffer")
+
 type obfsTLSConn struct {
 	net.Conn
 	sync.Mutex
@@ -175,16 +177,40 @@ func (c *obfsTLSConn) serverHandshake() (err error) {
 	pos += 2
 	end := pos + nlen
 	if nlen > 0 {
+		var serverName string
+		var preRead []byte
+
 		for pos < end {
 			extType := int(binary.BigEndian.Uint16(b[pos : pos+2]))
 			extLength := int(binary.BigEndian.Uint16(b[pos+2 : pos+4]))
 
+			if extType == 0x00 { // server name
+				serverNameExt := b[pos+4 : pos+4+extLength]
+				if len(serverNameExt) < 5 {
+					return ErrShortBuffer
+				}
+
+				hostLen := int(binary.BigEndian.Uint16(serverNameExt[3:5]))
+				if len(serverNameExt[5:]) < hostLen {
+					return ErrShortBuffer
+				}
+
+				serverName = string(serverNameExt[5 : 5+hostLen])
+			}
+
 			if extType == 0x23 { // session ticket
-				c.rbuf.Write(b[pos+4 : pos+4+extLength])
-				break
+				preRead = b[pos+4 : pos+4+extLength]
 			}
 
 			pos += 4 + extLength
+		}
+
+		if c.host != "" && c.host != serverName {
+			return newError("invalid host name: ", serverName)
+		}
+
+		if len(preRead) > 0 {
+			c.rbuf.Write(preRead)
 		}
 	}
 
