@@ -121,7 +121,7 @@ func isCertificateExpired(c *tls.Certificate) bool {
 	}
 
 	// If leaf is not there, the certificate is probably not used yet. We trust user to provide a valid certificate.
-	return c.Leaf != nil && c.Leaf.NotAfter.Before(time.Now().Add(-time.Minute))
+	return c.Leaf != nil && c.Leaf.NotAfter.Before(time.Now().Add(time.Minute*2))
 }
 
 func issueCertificate(rawCA *Certificate, domain string) (*tls.Certificate, error) {
@@ -173,6 +173,9 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
 			for _, certificate := range c.Certificates {
 				if !isCertificateExpired(&certificate) {
 					newCerts = append(newCerts, certificate)
+				} else if certificate.Leaf != nil {
+					expTime := certificate.Leaf.NotAfter.Format(time.RFC3339)
+					newError("old certificate for ", domain, " (expire on ", expTime, ") discarded").AtInfo().WriteToLog()
 				}
 			}
 
@@ -189,6 +192,14 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
 				if err != nil {
 					newError("failed to issue new certificate for ", domain).Base(err).WriteToLog()
 					continue
+				}
+				parsed, err := x509.ParseCertificate(newCert.Certificate[0])
+				if err == nil {
+					newCert.Leaf = parsed
+					expTime := parsed.NotAfter.Format(time.RFC3339)
+					newError("new certificate for ", domain, " (expire on ", expTime, ") issued").AtInfo().WriteToLog()
+				} else {
+					newError("failed to parse new certificate for ", domain).Base(err).WriteToLog()
 				}
 
 				access.Lock()
@@ -211,13 +222,13 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
 	}
 }
 
-func getNewGetCertficateFunc(certs []*tls.Certificate) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func getNewGetCertificateFunc(certs []*tls.Certificate, rejectUnknownSNI bool) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if len(certs) == 0 {
-			return nil, newError("empty certs")
+			return nil, errNoCertificates
 		}
 		sni := strings.ToLower(hello.ServerName)
-		if len(certs) == 1 || sni == "" {
+		if !rejectUnknownSNI && (len(certs) == 1 || sni == "") {
 			return certs[0], nil
 		}
 		gsni := "*"
@@ -233,6 +244,9 @@ func getNewGetCertficateFunc(certs []*tls.Certificate) func(hello *tls.ClientHel
 					return keyPair, nil
 				}
 			}
+		}
+		if rejectUnknownSNI {
+			return nil, errNoCertificates
 		}
 		return certs[0], nil
 	}
@@ -275,7 +289,7 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 	if len(caCerts) > 0 {
 		config.GetCertificate = getGetCertificateFunc(config, caCerts)
 	} else {
-		config.GetCertificate = getNewGetCertficateFunc(c.BuildCertificates())
+		config.GetCertificate = getNewGetCertificateFunc(c.BuildCertificates(), c.RejectUnknownSni)
 	}
 
 	if sn := c.parseServerName(); len(sn) > 0 {

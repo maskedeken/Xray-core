@@ -180,14 +180,24 @@ func (c *WebSocketConfig) Build() (*websocket.Config, error) {
 }
 
 type HTTPConfig struct {
-	Host *StringList `json:"host"`
-	Path string      `json:"path"`
+	Host               *StringList `json:"host"`
+	Path               string      `json:"path"`
+	ReadIdleTimeout    int32       `json:"read_idle_timeout"`
+	HealthCheckTimeout int32       `json:"health_check_timeout"`
 }
 
 // Build implements Buildable.
 func (c *HTTPConfig) Build() (proto.Message, error) {
+	if c.ReadIdleTimeout <= 0 {
+		c.ReadIdleTimeout = 0
+	}
+	if c.HealthCheckTimeout <= 0 {
+		c.HealthCheckTimeout = 0
+	}
 	config := &http.Config{
-		Path: c.Path,
+		Path:               c.Path,
+		IdleTimeout:        c.ReadIdleTimeout,
+		HealthCheckTimeout: c.HealthCheckTimeout,
 	}
 	if c.Host != nil {
 		config.Host = []string(*c.Host)
@@ -345,6 +355,7 @@ type TLSConfig struct {
 	CipherSuites             string           `json:"cipherSuites"`
 	PreferServerCipherSuites bool             `json:"preferServerCipherSuites"`
 	Fingerprint              string           `json:"fingerprint"`
+	RejectUnknownSNI         bool             `json:"rejectUnknownSni"`
 }
 
 // Build implements Buildable.
@@ -373,6 +384,7 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 	config.CipherSuites = c.CipherSuites
 	config.PreferServerCipherSuites = c.PreferServerCipherSuites
 	config.Fingerprint = strings.ToLower(c.Fingerprint)
+	config.RejectUnknownSni = c.RejectUnknownSNI
 	return config, nil
 }
 
@@ -436,6 +448,7 @@ type XTLSConfig struct {
 	MaxVersion               string            `json:"maxVersion"`
 	CipherSuites             string            `json:"cipherSuites"`
 	PreferServerCipherSuites bool              `json:"preferServerCipherSuites"`
+	RejectUnknownSNI         bool              `json:"rejectUnknownSni"`
 }
 
 // Build implements Buildable.
@@ -463,6 +476,7 @@ func (c *XTLSConfig) Build() (proto.Message, error) {
 	config.MaxVersion = c.MaxVersion
 	config.CipherSuites = c.CipherSuites
 	config.PreferServerCipherSuites = c.PreferServerCipherSuites
+	config.RejectUnknownSni = c.RejectUnknownSNI
 	return config, nil
 }
 
