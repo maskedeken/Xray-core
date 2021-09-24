@@ -45,7 +45,7 @@ func (a *MemoryAccount) NewEncryptionWriter(writer io.Writer) (buf.Writer, error
 	if a.Cipher.IVSize() > 0 {
 		iv = make([]byte, a.Cipher.IVSize())
 		common.Must2(rand.Read(iv))
-		if err := buf.WriteAllBytes(writer, iv); err != nil {
+		if err := buf.WriteAllBytes(writer, iv, nil); err != nil {
 			return nil, newError("failed to write IV.").Base(err)
 		}
 	}

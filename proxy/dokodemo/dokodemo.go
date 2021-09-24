@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xtls/xray-core/transport/internet/stat"
+
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -24,7 +26,6 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
-	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
@@ -102,11 +103,11 @@ type hasHandshakeAddress interface {
 }
 
 // Process implements proxy.Inbound.
-func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn internet.Connection, dispatcher routing.Dispatcher) error {
+func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn stat.Connection, dispatcher routing.Dispatcher) error {
 	newError("processing connection from: ", conn.RemoteAddr()).AtDebug().WriteToLog(session.ExportIDToError(ctx))
 
 	iConn := conn
-	statConn, ok := iConn.(*internet.StatCouterConnection)
+	statConn, ok := iConn.(*stat.CounterConnection)
 	if ok {
 		iConn = statConn.Connection
 	}
@@ -382,18 +383,20 @@ func (w *PacketWriter) Close() error {
 
 func readV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, conn *xtls.Conn, rawConn syscall.RawConn, counter stats.Counter) error {
 	err := func() error {
+		var ct stats.Counter
 		for {
 			if conn.DirectIn {
 				conn.DirectIn = false
-				reader = buf.NewReadVReader(conn.Connection, rawConn)
+				reader = buf.NewReadVReader(conn.Connection, rawConn, nil)
+				ct = counter
 				if conn.SHOW {
 					fmt.Println(conn.MARK, "ReadV")
 				}
 			}
 			buffer, err := reader.ReadMultiBuffer()
 			if !buffer.IsEmpty() {
-				if counter != nil {
-					counter.Add(int64(buffer.Len()))
+				if ct != nil {
+					ct.Add(int64(buffer.Len()))
 				}
 				timer.Update()
 				if werr := writer.WriteMultiBuffer(buffer); werr != nil {

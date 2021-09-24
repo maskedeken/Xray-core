@@ -77,7 +77,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 	h.serveMUX(c) // handle mux session
 }
 
-func (h *requestHandler) serveMUX(conn internet.Connection) {
+func (h *requestHandler) serveMUX(conn *connection) {
 	smuxConfig := smux.DefaultConfig()
 	session, err := smux.Server(conn, smuxConfig)
 	if err != nil {
@@ -93,7 +93,7 @@ func (h *requestHandler) serveMUX(conn internet.Connection) {
 			return
 		}
 
-		h.ln.addConn(internet.Connection(stream))
+		h.ln.addConn(stream)
 	}
 }
 

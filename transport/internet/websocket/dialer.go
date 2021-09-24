@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xtls/xray-core/transport/internet/stat"
+
 	"github.com/gorilla/websocket"
 	"github.com/xtaci/smux"
 
@@ -61,16 +63,17 @@ func init() {
 }
 
 // Dial dials a WebSocket connection to the given destination.
-func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
+func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	wsSettings := streamSettings.ProtocolSettings.(*Config)
 	if !wsSettings.Mux {
 		newError("creating connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
-		return dialWebSocket(ctx, dest, streamSettings)
-	} else {
-		newError("creating mux connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
+		conn, err := dialWebSocket(ctx, dest, streamSettings)
+		return stat.Connection(conn), err
 	}
 
-	createNewMuxConn := func(sess *muxSession) (net.Conn, error) {
+	newError("creating mux connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
+
+	createNewMuxConn := func(sess *muxSession) (stat.Connection, error) {
 		stream, err := sess.client.OpenStream()
 		if err != nil {
 			sess.underlayConn.Close()
@@ -79,7 +82,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 			return nil, newError("failed to open mux stream").Base(err)
 		}
 
-		return stream, nil
+		return stat.Connection(stream), nil
 	}
 
 	pool.Lock()
@@ -106,10 +109,6 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	return createNewMuxConn(sess)
 }
 
-func init() {
-	common.Must(internet.RegisterTransportDialer(protocolName, Dial))
-}
-
 func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
 	var conn net.Conn
 	if streamSettings.ProtocolSettings.(*Config).Ed > 0 {
@@ -128,6 +127,10 @@ func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *in
 		}
 	}
 	return conn, nil
+}
+
+func init() {
+	common.Must(internet.RegisterTransportDialer(protocolName, Dial))
 }
 
 func dialConn(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, ed []byte) (net.Conn, error) {

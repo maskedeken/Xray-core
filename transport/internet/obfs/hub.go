@@ -9,6 +9,7 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
 type Listener struct {
@@ -88,7 +89,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 						return
 					}
 
-					addConn(internet.Connection(fakeTLSConn))
+					addConn(stat.Connection(fakeTLSConn))
 					return
 				}
 
@@ -98,7 +99,7 @@ func ListenObfs(ctx context.Context, address net.Address, port net.Port, streamS
 					return
 				}
 
-				addConn(internet.Connection(fakeHTTPConn))
+				addConn(stat.Connection(fakeHTTPConn))
 			}()
 
 		}
