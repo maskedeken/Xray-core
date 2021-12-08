@@ -43,6 +43,7 @@ var pool = muxPool{sessions: make(map[dialerConf]*muxSession)}
 
 //go:embed dialer.html
 var webpage []byte
+
 var conns chan *websocket.Conn
 
 func init() {
@@ -184,6 +185,7 @@ func dialConn(ctx context.Context, dest net.Destination, streamSettings *interne
 
 	header := wsSettings.GetRequestHeader()
 	if ed != nil {
+		// RawURLEncoding is support by both V2Ray/V2Fly and XRay.
 		header.Set("Sec-WebSocket-Protocol", base64.RawURLEncoding.EncodeToString(ed))
 	}
 

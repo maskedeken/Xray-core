@@ -7,13 +7,12 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"io"
-	"reflect"
-	"strconv"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/antireplay"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/crypto"
 	"github.com/xtls/xray-core/common/protocol"
@@ -23,7 +22,13 @@ import (
 type MemoryAccount struct {
 	Cipher Cipher
 	Key    []byte
+
+	replayFilter antireplay.GeneralizedReplayFilter
 }
+
+var (
+	ErrIVNotUnique = newError("IV is not unique")
+)
 
 // Equals implements protocol.Account.Equals().
 func (a *MemoryAccount) Equals(another protocol.Account) bool {
@@ -33,21 +38,14 @@ func (a *MemoryAccount) Equals(another protocol.Account) bool {
 	return false
 }
 
-func (a *MemoryAccount) GetCipherName() string {
-	switch a.Cipher.(type) {
-	case *AEADCipher:
-		switch reflect.ValueOf(a.Cipher.(*AEADCipher).AEADAuthCreator).Pointer() {
-		case reflect.ValueOf(createAesGcm).Pointer():
-			keyBytes := a.Cipher.(*AEADCipher).KeyBytes
-			return "AES_" + strconv.FormatInt(int64(keyBytes*8), 10) + "_GCM"
-		case reflect.ValueOf(createChaCha20Poly1305).Pointer():
-			return "CHACHA20_POLY1305"
-		}
-	case *NoneCipher:
-		return "NONE"
+func (a *MemoryAccount) CheckIV(iv []byte) error {
+	if a.replayFilter == nil {
+		return nil
 	}
-
-	return ""
+	if a.replayFilter.Check(iv) {
+		return nil
+	}
+	return ErrIVNotUnique
 }
 
 func createAesGcm(key []byte) cipher.AEAD {
@@ -64,10 +62,10 @@ func createChaCha20Poly1305(key []byte) cipher.AEAD {
 	return ChaChaPoly1305
 }
 
-func createXChacha20Poly1305(key []byte) cipher.AEAD {
-	xchacha20, err := chacha20poly1305.NewX(key)
+func createXChaCha20Poly1305(key []byte) cipher.AEAD {
+	XChaChaPoly1305, err := chacha20poly1305.NewX(key)
 	common.Must(err)
-	return xchacha20
+	return XChaChaPoly1305
 }
 
 func (a *Account) getCipher() (Cipher, error) {
@@ -94,7 +92,7 @@ func (a *Account) getCipher() (Cipher, error) {
 		return &AEADCipher{
 			KeyBytes:        32,
 			IVBytes:         32,
-			AEADAuthCreator: createXChacha20Poly1305,
+			AEADAuthCreator: createXChaCha20Poly1305,
 		}, nil
 	case CipherType_NONE:
 		return NoneCipher{}, nil
@@ -112,6 +110,12 @@ func (a *Account) AsAccount() (protocol.Account, error) {
 	return &MemoryAccount{
 		Cipher: Cipher,
 		Key:    passwordToCipherKey([]byte(a.Password), Cipher.KeySize()),
+		replayFilter: func() antireplay.GeneralizedReplayFilter {
+			if a.IvCheck {
+				return antireplay.NewBloomRing()
+			}
+			return nil
+		}(),
 	}, nil
 }
 

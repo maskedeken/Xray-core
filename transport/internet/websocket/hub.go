@@ -46,7 +46,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 	}
 
 	var extraReader io.Reader
-	var responseHeader = http.Header{}
+	responseHeader := http.Header{}
 	if str := request.Header.Get("Sec-WebSocket-Protocol"); str != "" {
 		if ed, err := base64.RawURLEncoding.DecodeString(replacer.Replace(str)); err == nil && len(ed) > 0 {
 			extraReader = bytes.NewReader(ed)
@@ -121,7 +121,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 	}
 	var listener net.Listener
 	var err error
-	if port == net.Port(0) { //unix
+	if port == net.Port(0) { // unix
 		listener, err = internet.ListenSystem(ctx, &net.UnixAddr{
 			Name: address.Domain(),
 			Net:  "unix",
@@ -134,7 +134,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		if locker != nil {
 			l.locker = locker.(*internet.FileLocker)
 		}
-	} else { //tcp
+	} else { // tcp
 		listener, err = internet.ListenSystem(ctx, &net.TCPAddr{
 			IP:   address.IP(),
 			Port: int(port),

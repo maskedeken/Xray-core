@@ -25,23 +25,22 @@ import (
 // by selecting the ALPN token "dq" in the crypto handshake.
 const NextProtoDQ = "doq-i00"
 
-const handshakeIdleTimeout = time.Second * 8
+const handshakeTimeout = time.Second * 8
 
 // QUICNameServer implemented DNS over QUIC
 type QUICNameServer struct {
 	sync.RWMutex
-	ips         map[string]record
+	ips         map[string]*record
 	pub         *pubsub.Service
 	cleanup     *task.Periodic
 	reqID       uint32
-	clientIP    net.IP
 	name        string
-	destination net.Destination
+	destination *net.Destination
 	session     quic.Session
 }
 
 // NewQUICNameServer creates DNS-over-QUIC client object for local resolving
-func NewQUICNameServer(url *url.URL, clientIP net.IP) (*QUICNameServer, error) {
+func NewQUICNameServer(url *url.URL) (*QUICNameServer, error) {
 	newError("DNS: created Local DNS-over-QUIC client for ", url.String()).AtInfo().WriteToLog()
 
 	var err error
@@ -55,11 +54,10 @@ func NewQUICNameServer(url *url.URL, clientIP net.IP) (*QUICNameServer, error) {
 	dest := net.UDPDestination(net.ParseAddress(url.Hostname()), port)
 
 	s := &QUICNameServer{
-		ips:         make(map[string]record),
+		ips:         make(map[string]*record),
 		pub:         pubsub.NewService(),
-		clientIP:    clientIP,
 		name:        url.String(),
-		destination: dest,
+		destination: &dest,
 	}
 	s.cleanup = &task.Periodic{
 		Interval: time.Minute,
@@ -101,7 +99,7 @@ func (s *QUICNameServer) Cleanup() error {
 	}
 
 	if len(s.ips) == 0 {
-		s.ips = make(map[string]record)
+		s.ips = make(map[string]*record)
 	}
 
 	return nil
@@ -111,7 +109,10 @@ func (s *QUICNameServer) updateIP(req *dnsRequest, ipRec *IPRecord) {
 	elapsed := time.Since(req.start)
 
 	s.Lock()
-	rec := s.ips[req.domain]
+	rec, found := s.ips[req.domain]
+	if !found {
+		rec = &record{}
+	}
 	updated := false
 
 	switch req.reqType {
@@ -168,7 +169,7 @@ func (s *QUICNameServer) sendQuery(ctx context.Context, domain string, clientIP 
 		go func(r *dnsRequest) {
 			// generate new context for each req, using same context
 			// may cause reqs all aborted if any one encounter an error
-			dnsCtx := context.Background()
+			dnsCtx := ctx
 
 			// reserve internal dns server requested Inbound
 			if inbound := session.InboundFromContext(ctx); inbound != nil {
@@ -176,8 +177,8 @@ func (s *QUICNameServer) sendQuery(ctx context.Context, domain string, clientIP 
 			}
 
 			dnsCtx = session.ContextWithContent(dnsCtx, &session.Content{
-				Protocol:      "quic",
-				SkipRoutePick: true,
+				Protocol:       "quic",
+				SkipDNSResolve: true,
 			})
 
 			var cancel context.CancelFunc
@@ -231,30 +232,30 @@ func (s *QUICNameServer) findIPsForDomain(domain string, option dns_feature.IPOp
 		return nil, errRecordNotFound
 	}
 
+	var err4 error
+	var err6 error
 	var ips []net.Address
-	var lastErr error
-	if option.IPv6Enable && record.AAAA != nil && record.AAAA.RCode == dnsmessage.RCodeSuccess {
-		aaaa, err := record.AAAA.getIPs()
-		if err != nil {
-			lastErr = err
-		}
-		ips = append(ips, aaaa...)
+	var ip6 []net.Address
+
+	if option.IPv4Enable {
+		ips, err4 = record.A.getIPs()
 	}
 
-	if option.IPv4Enable && record.A != nil && record.A.RCode == dnsmessage.RCodeSuccess {
-		a, err := record.A.getIPs()
-		if err != nil {
-			lastErr = err
-		}
-		ips = append(ips, a...)
+	if option.IPv6Enable {
+		ip6, err6 = record.AAAA.getIPs()
+		ips = append(ips, ip6...)
 	}
 
 	if len(ips) > 0 {
-		return toNetIP(ips), nil
+		return toNetIP(ips)
 	}
 
-	if lastErr != nil {
-		return nil, lastErr
+	if err4 != nil {
+		return nil, err4
+	}
+
+	if err6 != nil {
+		return nil, err6
 	}
 
 	if (option.IPv4Enable && record.A != nil) || (option.IPv6Enable && record.AAAA != nil) {
@@ -265,13 +266,17 @@ func (s *QUICNameServer) findIPsForDomain(domain string, option dns_feature.IPOp
 }
 
 // QueryIP is called from dns.Server->queryIPTimeout
-func (s *QUICNameServer) QueryIP(ctx context.Context, domain string, option dns_feature.IPOption) ([]net.IP, error) {
+func (s *QUICNameServer) QueryIP(ctx context.Context, domain string, clientIP net.IP, option dns_feature.IPOption, disableCache bool) ([]net.IP, error) {
 	fqdn := Fqdn(domain)
 
-	ips, err := s.findIPsForDomain(fqdn, option)
-	if err != errRecordNotFound {
-		newError(s.name, " cache HIT ", domain, " -> ", ips).Base(err).AtDebug().WriteToLog()
-		return ips, err
+	if disableCache {
+		newError("DNS cache is disabled. Querying IP for ", domain, " at ", s.name).AtDebug().WriteToLog()
+	} else {
+		ips, err := s.findIPsForDomain(fqdn, option)
+		if err != errRecordNotFound {
+			newError(s.name, " cache HIT ", domain, " -> ", ips).Base(err).AtDebug().WriteToLog()
+			return ips, err
+		}
 	}
 
 	// ipv4 and ipv6 belong to different subscription groups
@@ -300,7 +305,7 @@ func (s *QUICNameServer) QueryIP(ctx context.Context, domain string, option dns_
 		}
 		close(done)
 	}()
-	s.sendQuery(ctx, fqdn, s.clientIP, option)
+	s.sendQuery(ctx, fqdn, clientIP, option)
 
 	for {
 		ips, err := s.findIPsForDomain(fqdn, option)
@@ -362,7 +367,7 @@ func (s *QUICNameServer) getSession() (quic.Session, error) {
 func (s *QUICNameServer) openSession() (quic.Session, error) {
 	tlsConfig := tls.Config{}
 	quicConfig := &quic.Config{
-		HandshakeIdleTimeout: handshakeIdleTimeout,
+		HandshakeIdleTimeout: handshakeTimeout,
 	}
 
 	session, err := quic.DialAddrContext(context.Background(), s.destination.NetAddr(), tlsConfig.GetTLSConfig(tls.WithNextProto("http/1.1", http2.NextProtoTLS, NextProtoDQ)), quicConfig)
