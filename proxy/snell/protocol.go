@@ -1,11 +1,13 @@
 package snell
 
 import (
+	"crypto/cipher"
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/crypto"
+	"github.com/xtls/xray-core/common/dice"
 	"github.com/xtls/xray-core/common/net"
 	protocol "github.com/xtls/xray-core/common/protocol"
 )
@@ -107,37 +109,70 @@ func ReadResponse(r buf.Reader) (buf.Reader, error) {
 }
 
 // ReadRequest reads a Snell TCP session from the given reader, returns its header and remaining parts.
-func ReadRequest(r buf.Reader) (*protocol.RequestHeader, buf.Reader, error) {
-	mb, err := r.ReadMultiBuffer()
+func ReadRequest(reader io.Reader, account *MemoryAccount) (*protocol.RequestHeader, buf.Reader, error) {
+	BaseDrainSize := dice.Roll(3266)
+	RandDrainMax := dice.Roll(64) + 1
+	RandDrainRolled := dice.Roll(RandDrainMax)
+	DrainSize := BaseDrainSize + 16 + 38 + RandDrainRolled
+	readSizeRemain := DrainSize
+
+	buffer := buf.New()
+	n, err := buffer.ReadFullFrom(reader, 50)
+	readSizeRemain -= int(n)
 	if err != nil {
-		return nil, nil, err
+		drainConnN(reader, readSizeRemain)
+		buffer.Release()
+		return nil, nil, newError("failed to read first payload").Base(err)
 	}
 
-	var buffer [3]byte
-
-	mbContainer := &buf.MultiBufferContainer{MultiBuffer: mb}
-	n, err := mbContainer.Read(buffer[:])
+	aead, ivLen, err := getCipher(buffer.Bytes(), account)
 	if err != nil {
-		return nil, nil, err
+		drainConnN(reader, readSizeRemain)
+		buffer.Release()
+		return nil, nil, newError("failed to initialize decoding stream").Base(err)
 	}
 
-	if n < 2 {
-		mbContainer.Close()
+	buffer.Advance(ivLen)
+	br := &buf.BufferedReader{
+		Reader: buf.NewReader(reader),
+		Buffer: buf.MultiBuffer{buffer},
+	}
+	auth := &crypto.AEADAuthenticator{
+		AEAD:           aead,
+		NonceGenerator: crypto.GenerateAEADNonceWithSize(aead.NonceSize()),
+	}
+	r := crypto.NewAuthenticationReader(auth, &crypto.AEADChunkSizeParser{
+		Auth: auth,
+	}, br, protocol.TransferTypeStream, nil)
+
+	br = &buf.BufferedReader{
+		Reader: r,
+	}
+
+	var data [3]byte
+	nRead, err := br.Read(data[:])
+	if err != nil {
+		drainConnN(reader, readSizeRemain)
+		return nil, nil, newError("failed to read snell header").Base(err)
+	}
+
+	if nRead < 2 {
+		drainConnN(reader, readSizeRemain)
 		return nil, nil, newError("invalid snell protocol")
 	}
 
-	switch buffer[0] {
+	switch data[0] {
 	case Version:
 	default:
-		mbContainer.Close()
+		drainConnN(reader, readSizeRemain)
 		return nil, nil, newError("invalid snell version")
 	}
 
-	cmd := buffer[1] // command
+	cmd := data[1] // command
 	switch cmd {
 	case CommandPing, CommandConnect, CommandUDP:
 	default:
-		mbContainer.Close()
+		drainConnN(reader, readSizeRemain)
 		return nil, nil, newError("invalid snell command")
 	}
 
@@ -147,30 +182,24 @@ func ReadRequest(r buf.Reader) (*protocol.RequestHeader, buf.Reader, error) {
 	}
 
 	if cmd == CommandPing {
-		mbContainer.Close()
 		return request, nil, nil
 	}
 
-	idLen := buffer[2] // user id length
+	idLen := data[2] // user id length
 	if idLen > 0 {
-		if _, err := io.CopyN(ioutil.Discard, mbContainer, int64(idLen)); err != nil { // just discard user id
-			mbContainer.Close()
-			return nil, nil, err
+		if err = drainConnN(br, int(idLen)); err != nil { // just discard user id
+			drainConnN(reader, readSizeRemain)
+			return nil, nil, newError("failed to read user id").Base(err)
 		}
 	}
 
-	addr, port, err := readAddressPort(mbContainer)
+	addr, port, err := readAddressPort(br)
 	if err != nil {
-		mbContainer.Close()
+		drainConnN(reader, readSizeRemain)
 		return nil, nil, err
 	}
 	request.Address = addr
 	request.Port = port
-
-	br := &buf.BufferedReader{
-		Reader: r,
-		Buffer: mbContainer.MultiBuffer,
-	}
 
 	if cmd == CommandUDP {
 		return request, &PacketReader{Reader: br}, nil
@@ -179,18 +208,30 @@ func ReadRequest(r buf.Reader) (*protocol.RequestHeader, buf.Reader, error) {
 	return request, br, nil
 }
 
-func WriteResponse(request *protocol.RequestHeader, w buf.Writer) (buf.Writer, error) {
-	buffer := buf.New()
-	if request.Command == protocol.RequestCommand(CommandUDP) {
+func WriteResponse(request *protocol.RequestHeader, w buf.Writer) (writer buf.Writer, err error) {
+	switch byte(request.Command) {
+	case CommandUDP:
 		target := net.UDPDestination(request.Address, request.Port)
-		buffer.WriteByte(CommandUDP)
-		w.WriteMultiBuffer(buf.MultiBuffer{buffer})
-		return &PacketWriter{Writer: w, Target: target}, nil
+		if err = WriteCommand(w, CommandUDP); err != nil {
+			return nil, err
+		}
+
+		writer = &PacketWriter{Writer: w, Target: target}
+	case CommandConnect:
+		if err = WriteCommand(w, CommandTunnel); err != nil {
+			return nil, err
+		}
+
+		writer = w
+	default:
+		return nil, newError("invalid snell command")
 	}
 
-	buffer.WriteByte(CommandTunnel)
-	w.WriteMultiBuffer(buf.MultiBuffer{buffer})
-	return w, nil
+	return
+}
+
+func WriteCommand(w buf.Writer, command byte) error {
+	return w.WriteMultiBuffer(buf.MergeBytes(nil, []byte{command}))
 }
 
 // PacketWriter UDP Connection Writer Wrapper for snell protocol
@@ -305,5 +346,25 @@ func readAddressPort(r io.Reader) (addr net.Address, port net.Port, err error) {
 	}
 	addr = net.ParseAddress(string(buffer.BytesTo(hlen)))
 	port = net.Port(binary.BigEndian.Uint16(buffer.BytesRange(hlen, hlen+2)))
+	return
+}
+
+func drainConnN(reader io.Reader, n int) error {
+	_, err := io.CopyN(io.Discard, reader, int64(n))
+	return err
+}
+
+func getCipher(payload []byte, account *MemoryAccount) (aead cipher.AEAD, ivLen int32, err error) {
+	snellCipher := account.Cipher
+	ivLen = snellCipher.IVSize()
+	iv := payload[:ivLen]
+	subkey := snellKDF(account.PSK, iv, snellCipher.KeySize())
+	aead, err = snellCipher.AEADAuthCreator(subkey)
+	if err != nil {
+		return
+	}
+
+	data := make([]byte, 16)
+	_, err = aead.Open(data[:0], data[4:16], payload[ivLen:ivLen+18], nil)
 	return
 }

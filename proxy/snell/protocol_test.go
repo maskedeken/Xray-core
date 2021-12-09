@@ -10,6 +10,7 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	protocol "github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/proxy/snell"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func TestPing(t *testing.T) {
@@ -20,17 +21,9 @@ func TestPing(t *testing.T) {
 
 	writer, err := account.NewEncryptionWriter(mbContainer)
 	common.Must(err)
-	reader, err := account.NewDecryptionReader(mbContainer)
-	common.Must(err)
+	common.Must(writer.WriteMultiBuffer(buf.MergeBytes(nil, []byte{snell.Version, snell.CommandPing})))
 
-	buffer := buf.New()
-	defer buffer.Release()
-
-	common.Must(buffer.WriteByte(snell.Version))
-	common.Must(buffer.WriteByte(snell.CommandPing))
-	common.Must(writer.WriteMultiBuffer(buf.MultiBuffer{buffer}))
-
-	header, _, err := snell.ReadRequest(reader)
+	header, _, err := snell.ReadRequest(mbContainer, account)
 	common.Must(err)
 	if header.Command != protocol.RequestCommand(snell.CommandPing) {
 		t.Error("wrong command: ", header.Command)
@@ -47,12 +40,7 @@ func TestPong(t *testing.T) {
 	common.Must(err)
 	reader, err := account.NewDecryptionReader(mbContainer)
 	common.Must(err)
-
-	buffer := buf.New()
-	defer buffer.Release()
-
-	common.Must(buffer.WriteByte(snell.CommandPong))
-	common.Must(writer.WriteMultiBuffer(buf.MultiBuffer{buffer}))
+	common.Must(snell.WriteCommand(writer, snell.CommandPong))
 
 	_, err = snell.ReadResponse(reader)
 	if err != nil {
@@ -70,8 +58,6 @@ func TestConnect(t *testing.T) {
 	defer mbContainer.Close()
 
 	writer, err := account.NewEncryptionWriter(mbContainer)
-	common.Must(err)
-	reader, err := account.NewDecryptionReader(mbContainer)
 	common.Must(err)
 
 	buffer := buf.New()
@@ -91,7 +77,7 @@ func TestConnect(t *testing.T) {
 	buffer.Write(sendMsg)
 	common.Must(w.WriteMultiBuffer(buf.MultiBuffer{buffer}))
 
-	header, r, err := snell.ReadRequest(reader)
+	header, r, err := snell.ReadRequest(mbContainer, account)
 	common.Must(err)
 	if header.Command != protocol.RequestCommand(snell.CommandConnect) {
 		t.Error("wrong command: ", header.Command)
@@ -161,8 +147,9 @@ func createSnellAccount() *snell.MemoryAccount {
 	return &snell.MemoryAccount{
 		PSK: []byte("123456yf"),
 		Cipher: &snell.SnellCipher{
-			KeyBytes: 32,
-			IVBytes:  16,
+			KeyBytes:        32,
+			IVBytes:         16,
+			AEADAuthCreator: chacha20poly1305.New,
 		},
 	}
 }

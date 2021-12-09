@@ -2,6 +2,7 @@ package snell
 
 import (
 	"bytes"
+	"crypto/cipher"
 	"crypto/rand"
 	"io"
 
@@ -30,8 +31,9 @@ func (a *MemoryAccount) Equals(another protocol.Account) bool {
 // AsAccount implements protocol.AsAccount.
 func (a *Account) AsAccount() (protocol.Account, error) {
 	cipher := &SnellCipher{
-		KeyBytes: 32,
-		IVBytes:  16,
+		KeyBytes:        32,
+		IVBytes:         16,
+		AEADAuthCreator: chacha20poly1305.New,
 	}
 
 	return &MemoryAccount{
@@ -66,8 +68,9 @@ func (a *MemoryAccount) NewDecryptionReader(reader io.Reader) (buf.Reader, error
 }
 
 type SnellCipher struct {
-	KeyBytes int32
-	IVBytes  int32
+	KeyBytes        int32
+	IVBytes         int32
+	AEADAuthCreator func(key []byte) (cipher.AEAD, error)
 }
 
 func (c *SnellCipher) KeySize() int32 {
@@ -80,7 +83,7 @@ func (c *SnellCipher) IVSize() int32 {
 
 func (c *SnellCipher) createAuthenticator(key []byte, iv []byte) (*crypto.AEADAuthenticator, error) {
 	subkey := snellKDF(key, iv, c.KeySize())
-	aead, err := chacha20poly1305.New(subkey)
+	aead, err := c.AEADAuthCreator(subkey)
 	if err != nil {
 		return nil, err
 	}

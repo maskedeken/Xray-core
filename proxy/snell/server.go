@@ -66,27 +66,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 		return newError("failed to initialize encoding stream").Base(err)
 	}
 
-	first := buf.New()
-	defer first.Release()
-
-	_, err = first.ReadFrom(conn)
-	if err != nil {
-		return newError("failed to read the first payload").Base(err)
-	}
-
-	if first.Len() < account.Cipher.IVSize() {
-		return newError("invalid IV size")
-	}
-
-	decryptReader, err := account.NewDecryptionReader(&buf.BufferedReader{
-		Reader: buf.NewReader(conn),
-		Buffer: buf.MultiBuffer{first},
-	})
-	if err != nil {
-		return newError("failed to initialize decoding stream").Base(err)
-	}
-
-	request, reqeustReader, err := ReadRequest(decryptReader)
+	request, reqeustReader, err := ReadRequest(conn, account)
 	if err != nil {
 		log.Record(&log.AccessMessage{
 			From:   conn.RemoteAddr(),
@@ -99,8 +79,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 	}
 
 	if request.Command == protocol.RequestCommand(CommandPing) { // reponse pong if got ping
-		err := encryptWriter.WriteMultiBuffer(buf.MultiBuffer{buf.NewExisted([]byte{CommandPong})})
-		if err != nil {
+		if err := WriteCommand(encryptWriter, CommandPong); err != nil {
 			return newError("failed to write response").Base(err)
 		}
 
