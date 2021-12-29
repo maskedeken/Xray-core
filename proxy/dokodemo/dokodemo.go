@@ -10,8 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xtls/xray-core/transport/internet/stat"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -26,6 +24,7 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
