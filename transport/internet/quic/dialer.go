@@ -9,7 +9,6 @@ import (
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/logging"
 	"github.com/lucas-clemente/quic-go/qlog"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/task"
@@ -142,7 +141,7 @@ func (s *clientConnections) openConnection(ctx context.Context, destAddr net.Add
 
 	quicConfig := &quic.Config{
 		ConnectionIDLength: 12,
-		KeepAlive:          false,
+		KeepAlivePeriod:    0,
 		Tracer: qlog.NewTracer(func(_ logging.Perspective, connID []byte) io.WriteCloser {
 			return &QlogWriter{connID: connID}
 		}),

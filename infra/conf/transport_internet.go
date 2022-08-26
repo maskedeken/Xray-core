@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/golang/protobuf/proto"
-
 	"github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
@@ -560,6 +559,7 @@ type SocketConfig struct {
 	DomainStrategy       string      `json:"domainStrategy"`
 	DialerProxy          string      `json:"dialerProxy"`
 	TCPKeepAliveInterval int32       `json:"tcpKeepAliveInterval"`
+	TCPKeepAliveIdle     int32       `json:"tcpKeepAliveIdle"`
 }
 
 // Build implements Buildable.
@@ -607,6 +607,7 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		AcceptProxyProtocol:  c.AcceptProxyProtocol,
 		DialerProxy:          c.DialerProxy,
 		TcpKeepAliveInterval: c.TCPKeepAliveInterval,
+		TcpKeepAliveIdle:     c.TCPKeepAliveIdle,
 	}, nil
 }
 

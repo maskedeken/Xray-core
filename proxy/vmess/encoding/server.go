@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/chacha20poly1305"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/bitmask"
 	"github.com/xtls/xray-core/common/buf"
@@ -24,6 +22,7 @@ import (
 	"github.com/xtls/xray-core/common/task"
 	"github.com/xtls/xray-core/proxy/vmess"
 	vmessaead "github.com/xtls/xray-core/proxy/vmess/aead"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 type sessionID struct {
@@ -140,7 +139,6 @@ func (s *ServerSession) DecodeRequestHeader(reader io.Reader, isDrain bool) (*pr
 	buffer := buf.New()
 
 	drainer, err := drain.NewBehaviorSeedLimitedDrainer(int64(s.userValidator.GetBehaviorSeed()), 16+38, 3266, 64)
-
 	if err != nil {
 		return nil, newError("failed to initialize drainer").Base(err)
 	}
@@ -312,21 +310,25 @@ func (s *ServerSession) DecodeRequestHeader(reader io.Reader, isDrain bool) (*pr
 }
 
 // DecodeRequestBody returns Reader from which caller can fetch decrypted body.
-func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reader io.Reader) buf.Reader {
+func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reader io.Reader) (buf.Reader, error) {
 	var sizeParser crypto.ChunkSizeDecoder = crypto.PlainChunkSizeParser{}
 	if request.Option.Has(protocol.RequestOptionChunkMasking) {
 		sizeParser = NewShakeSizeParser(s.requestBodyIV[:])
 	}
 	var padding crypto.PaddingLengthGenerator
 	if request.Option.Has(protocol.RequestOptionGlobalPadding) {
-		padding = sizeParser.(crypto.PaddingLengthGenerator)
+		var ok bool
+		padding, ok = sizeParser.(crypto.PaddingLengthGenerator)
+		if !ok {
+			return nil, newError("invalid option: RequestOptionGlobalPadding")
+		}
 	}
 
 	switch request.Security {
 	case protocol.SecurityType_NONE:
 		if request.Option.Has(protocol.RequestOptionChunkStream) {
 			if request.Command.TransferType() == protocol.TransferTypeStream {
-				return crypto.NewChunkStreamReader(sizeParser, reader)
+				return crypto.NewChunkStreamReader(sizeParser, reader), nil
 			}
 
 			auth := &crypto.AEADAuthenticator{
@@ -334,9 +336,9 @@ func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reade
 				NonceGenerator:          crypto.GenerateEmptyBytes(),
 				AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
 			}
-			return crypto.NewAuthenticationReader(auth, sizeParser, reader, protocol.TransferTypePacket, padding)
+			return crypto.NewAuthenticationReader(auth, sizeParser, reader, protocol.TransferTypePacket, padding), nil
 		}
-		return buf.NewReader(reader)
+		return buf.NewReader(reader), nil
 
 	case protocol.SecurityType_LEGACY:
 		aesStream := crypto.NewAesDecryptionStream(s.requestBodyKey[:], s.requestBodyIV[:])
@@ -347,9 +349,9 @@ func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reade
 				NonceGenerator:          crypto.GenerateEmptyBytes(),
 				AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
 			}
-			return crypto.NewAuthenticationReader(auth, sizeParser, cryptionReader, request.Command.TransferType(), padding)
+			return crypto.NewAuthenticationReader(auth, sizeParser, cryptionReader, request.Command.TransferType(), padding), nil
 		}
-		return buf.NewReader(cryptionReader)
+		return buf.NewReader(cryptionReader), nil
 
 	case protocol.SecurityType_AES128_GCM:
 		aead := crypto.NewAesGcm(s.requestBodyKey[:])
@@ -369,7 +371,7 @@ func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reade
 			}
 			sizeParser = NewAEADSizeParser(lengthAuth)
 		}
-		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType(), padding)
+		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType(), padding), nil
 
 	case protocol.SecurityType_CHACHA20_POLY1305:
 		aead, _ := chacha20poly1305.New(GenerateChacha20Poly1305Key(s.requestBodyKey[:]))
@@ -391,10 +393,10 @@ func (s *ServerSession) DecodeRequestBody(request *protocol.RequestHeader, reade
 			}
 			sizeParser = NewAEADSizeParser(lengthAuth)
 		}
-		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType(), padding)
+		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType(), padding), nil
 
 	default:
-		panic("Unknown security type.")
+		return nil, newError("invalid option: Security")
 	}
 }
 
@@ -455,21 +457,25 @@ func (s *ServerSession) EncodeResponseHeader(header *protocol.ResponseHeader, wr
 }
 
 // EncodeResponseBody returns a Writer that auto-encrypt content written by caller.
-func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writer io.Writer) buf.Writer {
+func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writer io.Writer) (buf.Writer, error) {
 	var sizeParser crypto.ChunkSizeEncoder = crypto.PlainChunkSizeParser{}
 	if request.Option.Has(protocol.RequestOptionChunkMasking) {
 		sizeParser = NewShakeSizeParser(s.responseBodyIV[:])
 	}
 	var padding crypto.PaddingLengthGenerator
 	if request.Option.Has(protocol.RequestOptionGlobalPadding) {
-		padding = sizeParser.(crypto.PaddingLengthGenerator)
+		var ok bool
+		padding, ok = sizeParser.(crypto.PaddingLengthGenerator)
+		if !ok {
+			return nil, newError("invalid option: RequestOptionGlobalPadding")
+		}
 	}
 
 	switch request.Security {
 	case protocol.SecurityType_NONE:
 		if request.Option.Has(protocol.RequestOptionChunkStream) {
 			if request.Command.TransferType() == protocol.TransferTypeStream {
-				return crypto.NewChunkStreamWriter(sizeParser, writer)
+				return crypto.NewChunkStreamWriter(sizeParser, writer), nil
 			}
 
 			auth := &crypto.AEADAuthenticator{
@@ -477,9 +483,9 @@ func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writ
 				NonceGenerator:          crypto.GenerateEmptyBytes(),
 				AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
 			}
-			return crypto.NewAuthenticationWriter(auth, sizeParser, writer, protocol.TransferTypePacket, padding)
+			return crypto.NewAuthenticationWriter(auth, sizeParser, writer, protocol.TransferTypePacket, padding), nil
 		}
-		return buf.NewWriter(writer)
+		return buf.NewWriter(writer), nil
 
 	case protocol.SecurityType_LEGACY:
 		if request.Option.Has(protocol.RequestOptionChunkStream) {
@@ -488,9 +494,9 @@ func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writ
 				NonceGenerator:          crypto.GenerateEmptyBytes(),
 				AdditionalDataGenerator: crypto.GenerateEmptyBytes(),
 			}
-			return crypto.NewAuthenticationWriter(auth, sizeParser, s.responseWriter, request.Command.TransferType(), padding)
+			return crypto.NewAuthenticationWriter(auth, sizeParser, s.responseWriter, request.Command.TransferType(), padding), nil
 		}
-		return &buf.SequentialWriter{Writer: s.responseWriter}
+		return &buf.SequentialWriter{Writer: s.responseWriter}, nil
 
 	case protocol.SecurityType_AES128_GCM:
 		aead := crypto.NewAesGcm(s.responseBodyKey[:])
@@ -510,7 +516,7 @@ func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writ
 			}
 			sizeParser = NewAEADSizeParser(lengthAuth)
 		}
-		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding)
+		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding), nil
 
 	case protocol.SecurityType_CHACHA20_POLY1305:
 		aead, _ := chacha20poly1305.New(GenerateChacha20Poly1305Key(s.responseBodyKey[:]))
@@ -532,9 +538,9 @@ func (s *ServerSession) EncodeResponseBody(request *protocol.RequestHeader, writ
 			}
 			sizeParser = NewAEADSizeParser(lengthAuth)
 		}
-		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding)
+		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType(), padding), nil
 
 	default:
-		panic("Unknown security type.")
+		return nil, newError("invalid option: Security")
 	}
 }

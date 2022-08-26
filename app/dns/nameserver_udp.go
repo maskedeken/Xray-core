@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/dns/dnsmessage"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
@@ -17,10 +15,10 @@ import (
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal/pubsub"
 	"github.com/xtls/xray-core/common/task"
-	"github.com/xtls/xray-core/core"
 	dns_feature "github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport/internet/udp"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 // ClassicNameServer implemented traditional UDP DNS.
@@ -196,21 +194,7 @@ func (s *ClassicNameServer) sendQuery(ctx context.Context, domain string, client
 	for _, req := range reqs {
 		s.addPendingRequest(req)
 		b, _ := dns.PackMessage(req.msg)
-		udpCtx := core.ToBackgroundDetachedContext(ctx)
-		if inbound := session.InboundFromContext(ctx); inbound != nil {
-			udpCtx = session.ContextWithInbound(udpCtx, inbound)
-		}
-
-		udpCtx = session.ContextWithContent(udpCtx, &session.Content{
-			Protocol: "dns",
-		})
-		udpCtx = log.ContextWithAccessMessage(udpCtx, &log.AccessMessage{
-			From:   "DNS",
-			To:     s.address,
-			Status: log.AccessAccepted,
-			Reason: "",
-		})
-		s.udpServer.Dispatch(udpCtx, *s.address, b)
+		s.udpServer.Dispatch(toDnsContext(ctx, s.address.String()), *s.address, b)
 	}
 }
 
