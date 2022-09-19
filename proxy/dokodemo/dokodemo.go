@@ -176,7 +176,7 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn st
 				xtlsConn.MARK = "XTLS"
 				if d.config.Flow == XRD {
 					xtlsConn.DirectMode = true
-					if sc, ok := xtlsConn.Connection.(syscall.Conn); ok {
+					if sc, ok := xtlsConn.NetConn().(syscall.Conn); ok {
 						rawConn, _ = sc.SyscallConn()
 					}
 				}
@@ -386,7 +386,7 @@ func readV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, c
 		for {
 			if conn.DirectIn {
 				conn.DirectIn = false
-				reader = buf.NewReadVReader(conn.Connection, rawConn, nil)
+				reader = buf.NewReadVReader(conn.NetConn(), rawConn, nil)
 				ct = counter
 				if conn.SHOW {
 					fmt.Println(conn.MARK, "ReadV")
