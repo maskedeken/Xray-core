@@ -5,6 +5,7 @@ package outbound
 import (
 	"context"
 	"syscall"
+	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -148,7 +149,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			if requestAddons.Flow == vless.XRV {
 				if tlsConn, ok := iConn.(*tls.Conn); ok {
 					netConn = tlsConn.NetConn()
-					if sc, ok :=  netConn.(syscall.Conn); ok {
+					if sc, ok := netConn.(syscall.Conn); ok {
 						rawConn, _ = sc.SyscallConn()
 					}
 				} else if utlsConn, ok := iConn.(*tls.UConn); ok {
@@ -190,9 +191,11 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 	clientReader := link.Reader // .(*pipe.Reader)
 	clientWriter := link.Writer // .(*pipe.Writer)
-	isTLS13 := false
-	isTLS12 := false
+	enableXtls := false
+	isTLS12orAbove := false
 	isTLS := false
+	var cipher uint16 = 0
+	var remainingServerHello int32 = -1
 	numberOfPacketToFilter := 8
 
 	if request.Command == protocol.RequestCommandUDP && h.cone && request.Port != 53 && request.Port != 443 {
@@ -215,20 +218,26 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			serverWriter = xudp.NewPacketWriter(serverWriter, target)
 		}
 		userUUID := account.ID.Bytes()
-		multiBuffer, err1 := clientReader.ReadMultiBuffer()
-		if err1 != nil {
-			return err1 // ...
-		}
-		if requestAddons.Flow == vless.XRV {
-			encoding.XtlsFilterTls13(multiBuffer, &numberOfPacketToFilter, &isTLS13, &isTLS12, &isTLS, ctx)
-			if isTLS {
-				for i, b := range multiBuffer {
-					multiBuffer[i] = encoding.XtlsPadding(b, 0x00, &userUUID, ctx)
+		timeoutReader, ok := clientReader.(buf.TimeoutReader)
+		if ok {
+			multiBuffer, err1 := timeoutReader.ReadMultiBufferTimeout(time.Millisecond * 500)
+			if err1 == nil {
+				if requestAddons.Flow == vless.XRV {
+					encoding.XtlsFilterTls(multiBuffer, &numberOfPacketToFilter, &enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello, ctx)
+					if isTLS {
+						for i, b := range multiBuffer {
+							multiBuffer[i] = encoding.XtlsPadding(b, 0x00, &userUUID, ctx)
+						}
+					}
 				}
+				if err := serverWriter.WriteMultiBuffer(multiBuffer); err != nil {
+					return err // ...
+				}
+			} else if err1 != buf.ErrReadTimeout {
+				return err1
 			}
-		}
-		if err := serverWriter.WriteMultiBuffer(multiBuffer); err != nil {
-			return err // ...
+		} else {
+			newError("Reader is not timeout reader, will send out vless header separately from first payload").AtDebug().WriteToLog(session.ExportIDToError(ctx))
 		}
 		// Flush; bufferWriter.WriteMultiBufer now is bufferWriter.writer.WriteMultiBuffer
 		if err := bufferWriter.SetBuffered(false); err != nil {
@@ -241,7 +250,8 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			if statConn != nil {
 				counter = statConn.WriteCounter
 			}
-			err = encoding.XtlsWrite(clientReader, serverWriter, timer, netConn, counter, ctx, &userUUID, &numberOfPacketToFilter, &isTLS13, &isTLS12, &isTLS)
+			err = encoding.XtlsWrite(clientReader, serverWriter, timer, netConn, counter, ctx, &userUUID, &numberOfPacketToFilter,
+				&enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello)
 		} else {
 			// from clientReader.ReadMultiBuffer to serverWriter.WriteMultiBufer
 			err = buf.Copy(clientReader, serverWriter, buf.UpdateActivity(timer))
@@ -277,8 +287,12 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 				counter = statConn.ReadCounter
 			}
 			if requestAddons.Flow == vless.XRV {
-				err = encoding.XtlsRead(serverReader, clientWriter, timer, netConn, rawConn, counter, ctx, account.ID.Bytes(), &numberOfPacketToFilter, &isTLS13, &isTLS12, &isTLS)
+				err = encoding.XtlsRead(serverReader, clientWriter, timer, netConn, rawConn, counter, ctx, account.ID.Bytes(),
+					&numberOfPacketToFilter, &enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello)
 			} else {
+				if requestAddons.Flow != vless.XRS {
+					ctx = session.ContextWithInbound(ctx, nil)
+				}
 				err = encoding.ReadV(serverReader, clientWriter, timer, iConn.(*xtls.Conn), rawConn, counter, ctx)
 			}
 		} else {
