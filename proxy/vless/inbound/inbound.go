@@ -495,10 +495,6 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 							return newError(`failed to use `+requestAddons.Flow+`, found outer tls version `, tlsConn.ConnectionState().Version).AtWarning()
 						}
 						netConn = tlsConn.NetConn()
-						if pc, ok := netConn.(*proxyproto.Conn); ok {
-							netConn = pc.Raw()
-							// 8192 > 4096, there is no need to process pc's bufReader
-						}
 						t = reflect.TypeOf(tlsConn.Conn).Elem()
 						p = uintptr(unsafe.Pointer(tlsConn.Conn))
 					} else if realityConn, ok := iConn.(*reality.Conn); ok {
@@ -511,6 +507,10 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 						return newError(`failed to use ` + requestAddons.Flow + `, vision "security" must be "tls" or "reality"`).AtWarning()
 					} else {
 						return newError("XTLS only supports TCP, mKCP and DomainSocket for now.").AtWarning()
+					}
+					if pc, ok := netConn.(*proxyproto.Conn); ok {
+						netConn = pc.Raw()
+						// 8192 > 4096, there is no need to process pc's bufReader
 					}
 					if sc, ok := netConn.(syscall.Conn); ok {
 						rawConn, _ = sc.SyscallConn()
@@ -624,11 +624,9 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 		}
 		if requestAddons.Flow == vless.XRV {
 			encoding.XtlsFilterTls(multiBuffer, &numberOfPacketToFilter, &enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello, ctx)
-			if isTLS {
-				multiBuffer = encoding.ReshapeMultiBuffer(ctx, multiBuffer)
-				for i, b := range multiBuffer {
-					multiBuffer[i] = encoding.XtlsPadding(b, 0x00, &userUUID, ctx)
-				}
+			multiBuffer = encoding.ReshapeMultiBuffer(ctx, multiBuffer)
+			for i, b := range multiBuffer {
+				multiBuffer[i] = encoding.XtlsPadding(b, encoding.CommandPaddingContinue, &userUUID, isTLS, ctx)
 			}
 		}
 		if err := clientWriter.WriteMultiBuffer(multiBuffer); err != nil {
@@ -645,7 +643,7 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 			if statConn != nil {
 				counter = statConn.WriteCounter
 			}
-			err = encoding.XtlsWrite(serverReader, clientWriter, timer, netConn, counter, ctx, &userUUID, &numberOfPacketToFilter,
+			err = encoding.XtlsWrite(serverReader, clientWriter, timer, netConn, counter, ctx, &numberOfPacketToFilter,
 				&enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello)
 		} else {
 			// from serverReader.ReadMultiBuffer to clientWriter.WriteMultiBufer

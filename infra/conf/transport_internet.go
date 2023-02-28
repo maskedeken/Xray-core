@@ -38,6 +38,7 @@ var (
 		"wechat-video": func() interface{} { return new(WechatVideoAuthenticator) },
 		"dtls":         func() interface{} { return new(DTLSAuthenticator) },
 		"wireguard":    func() interface{} { return new(WireguardAuthenticator) },
+		"dns":          func() interface{} { return new(DNSAuthenticator) },
 	}, "type", "")
 
 	tcpHeaderLoader = NewJSONConfigLoader(ConfigCreatorCache{
@@ -366,19 +367,20 @@ func (c *TLSCertConfig) Build() (*tls.Certificate, error) {
 }
 
 type TLSConfig struct {
-	Insecure                         bool             `json:"allowInsecure"`
-	Certs                            []*TLSCertConfig `json:"certificates"`
-	ServerName                       string           `json:"serverName"`
-	ALPN                             *StringList      `json:"alpn"`
-	EnableSessionResumption          bool             `json:"enableSessionResumption"`
-	DisableSystemRoot                bool             `json:"disableSystemRoot"`
-	MinVersion                       string           `json:"minVersion"`
-	MaxVersion                       string           `json:"maxVersion"`
-	CipherSuites                     string           `json:"cipherSuites"`
-	PreferServerCipherSuites         bool             `json:"preferServerCipherSuites"`
-	Fingerprint                      string           `json:"fingerprint"`
-	RejectUnknownSNI                 bool             `json:"rejectUnknownSni"`
-	PinnedPeerCertificateChainSha256 *[]string        `json:"pinnedPeerCertificateChainSha256"`
+	Insecure                             bool             `json:"allowInsecure"`
+	Certs                                []*TLSCertConfig `json:"certificates"`
+	ServerName                           string           `json:"serverName"`
+	ALPN                                 *StringList      `json:"alpn"`
+	EnableSessionResumption              bool             `json:"enableSessionResumption"`
+	DisableSystemRoot                    bool             `json:"disableSystemRoot"`
+	MinVersion                           string           `json:"minVersion"`
+	MaxVersion                           string           `json:"maxVersion"`
+	CipherSuites                         string           `json:"cipherSuites"`
+	PreferServerCipherSuites             bool             `json:"preferServerCipherSuites"`
+	Fingerprint                          string           `json:"fingerprint"`
+	RejectUnknownSNI                     bool             `json:"rejectUnknownSni"`
+	PinnedPeerCertificateChainSha256     *[]string        `json:"pinnedPeerCertificateChainSha256"`
+	PinnedPeerCertificatePublicKeySha256 *[]string        `json:"pinnedPeerCertificatePublicKeySha256"`
 }
 
 // Build implements Buildable.
@@ -420,6 +422,17 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 				return nil, err
 			}
 			config.PinnedPeerCertificateChainSha256 = append(config.PinnedPeerCertificateChainSha256, hashValue)
+		}
+	}
+
+	if c.PinnedPeerCertificatePublicKeySha256 != nil {
+		config.PinnedPeerCertificatePublicKeySha256 = [][]byte{}
+		for _, v := range *c.PinnedPeerCertificatePublicKeySha256 {
+			hashValue, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, err
+			}
+			config.PinnedPeerCertificatePublicKeySha256 = append(config.PinnedPeerCertificatePublicKeySha256, hashValue)
 		}
 	}
 
@@ -654,11 +667,17 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 		if config.Fingerprint == "hellogolang" {
 			return nil, newError(`invalid "fingerprint": `, config.Fingerprint)
 		}
+		if len(c.ServerNames) != 0 {
+			return nil, newError(`non-empty "serverNames", please use "serverName" instead`)
+		}
 		if c.PublicKey == "" {
 			return nil, newError(`empty "publicKey"`)
 		}
 		if config.PublicKey, err = base64.RawURLEncoding.DecodeString(c.PublicKey); err != nil || len(config.PublicKey) != 32 {
 			return nil, newError(`invalid "publicKey": `, c.PublicKey)
+		}
+		if len(c.ShortIds) != 0 {
+			return nil, newError(`non-empty "shortIds", please use "shortId" instead`)
 		}
 		config.ShortId = make([]byte, 8)
 		if _, err = hex.Decode(config.ShortId, []byte(c.ShortId)); err != nil {
@@ -736,6 +755,7 @@ type SocketConfig struct {
 	TCPKeepAliveInterval int32       `json:"tcpKeepAliveInterval"`
 	TCPKeepAliveIdle     int32       `json:"tcpKeepAliveIdle"`
 	TCPCongestion        string      `json:"tcpCongestion"`
+	V6only               bool        `json:"v6only"`
 	Interface            string      `json:"interface"`
 }
 
@@ -786,6 +806,7 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		TcpKeepAliveInterval: c.TCPKeepAliveInterval,
 		TcpKeepAliveIdle:     c.TCPKeepAliveIdle,
 		TcpCongestion:        c.TCPCongestion,
+		V6Only:               c.V6only,
 		Interface:            c.Interface,
 	}, nil
 }
@@ -856,8 +877,8 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.SecurityType = tm.Type
 	}
 	if strings.EqualFold(c.Security, "reality") {
-		if config.ProtocolName != "tcp" && config.ProtocolName != "http" && config.ProtocolName != "domainsocket" {
-			return nil, newError("REALITY only supports TCP, H2 and DomainSocket for now.")
+		if config.ProtocolName != "tcp" && config.ProtocolName != "http" && config.ProtocolName != "grpc" && config.ProtocolName != "domainsocket" {
+			return nil, newError("REALITY only supports TCP, H2, gRPC and DomainSocket for now.")
 		}
 		if c.REALITYSettings == nil {
 			return nil, newError(`REALITY: Empty "realitySettings".`)
