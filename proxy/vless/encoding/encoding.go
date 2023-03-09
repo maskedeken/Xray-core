@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"fmt"
 	"io"
 	"math/big"
 	"runtime"
@@ -24,7 +23,6 @@ import (
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
-	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
 const (
@@ -204,65 +202,6 @@ func DecodeResponseHeader(reader io.Reader, request *protocol.RequestHeader) (*A
 	}
 
 	return responseAddons, nil
-}
-
-func ReadV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, conn *xtls.Conn, rawConn syscall.RawConn, counter stats.Counter, ctx context.Context) error {
-	err := func() error {
-		var ct stats.Counter
-		for {
-			if conn.DirectIn {
-				conn.DirectIn = false
-				if inbound := session.InboundFromContext(ctx); inbound != nil && inbound.Conn != nil {
-					iConn := inbound.Conn
-					statConn, ok := iConn.(*stat.CounterConnection)
-					if ok {
-						iConn = statConn.Connection
-					}
-					if xc, ok := iConn.(*xtls.Conn); ok {
-						iConn = xc.NetConn()
-					}
-					if tc, ok := iConn.(*net.TCPConn); ok {
-						if conn.SHOW {
-							fmt.Println(conn.MARK, "Splice")
-						}
-						runtime.Gosched() // necessary
-						w, err := tc.ReadFrom(conn.NetConn())
-						if counter != nil {
-							counter.Add(w)
-						}
-						if statConn != nil && statConn.WriteCounter != nil {
-							statConn.WriteCounter.Add(w)
-						}
-						return err
-					} else {
-						panic("XTLS Splice: not TCP inbound")
-					}
-				}
-				reader = buf.NewReadVReader(conn.NetConn(), rawConn, nil)
-				ct = counter
-				if conn.SHOW {
-					fmt.Println(conn.MARK, "ReadV")
-				}
-			}
-			buffer, err := reader.ReadMultiBuffer()
-			if !buffer.IsEmpty() {
-				if ct != nil {
-					ct.Add(int64(buffer.Len()))
-				}
-				timer.Update()
-				if werr := writer.WriteMultiBuffer(buffer); werr != nil {
-					return werr
-				}
-			}
-			if err != nil {
-				return err
-			}
-		}
-	}()
-	if err != nil && errors.Cause(err) != io.EOF {
-		return err
-	}
-	return nil
 }
 
 // XtlsRead filter and read xtls protocol
@@ -528,17 +467,17 @@ func ReshapeMultiBuffer(ctx context.Context, buffer buf.MultiBuffer) buf.MultiBu
 
 // XtlsPadding add padding to eliminate length siganature during tls handshake
 func XtlsPadding(b *buf.Buffer, command byte, userUUID *[]byte, longPadding bool, ctx context.Context) *buf.Buffer {
-	var contantLen int32 = 0
+	var contentLen int32 = 0
 	var paddingLen int32 = 0
 	if b != nil {
-		contantLen = b.Len()
+		contentLen = b.Len()
 	}
-	if contantLen < 900 && longPadding {
+	if contentLen < 900 && longPadding {
 		l, err := rand.Int(rand.Reader, big.NewInt(500))
 		if err != nil {
 			newError("failed to generate padding").Base(err).WriteToLog(session.ExportIDToError(ctx))
 		}
-		paddingLen = int32(l.Int64()) + 900 - contantLen
+		paddingLen = int32(l.Int64()) + 900 - contentLen
 	} else {
 		l, err := rand.Int(rand.Reader, big.NewInt(256))
 		if err != nil {
@@ -546,18 +485,22 @@ func XtlsPadding(b *buf.Buffer, command byte, userUUID *[]byte, longPadding bool
 		}
 		paddingLen = int32(l.Int64())
 	}
+	if paddingLen > buf.Size - 21 - contentLen {
+		paddingLen = buf.Size - 21 - contentLen
+	}
 	newbuffer := buf.New()
 	if userUUID != nil {
 		newbuffer.Write(*userUUID)
+		*userUUID = nil
 	}
-	newbuffer.Write([]byte{command, byte(contantLen >> 8), byte(contantLen), byte(paddingLen >> 8), byte(paddingLen)})
+	newbuffer.Write([]byte{command, byte(contentLen >> 8), byte(contentLen), byte(paddingLen >> 8), byte(paddingLen)})
 	if b != nil {
 		newbuffer.Write(b.Bytes())
 		b.Release()
 		b = nil
 	}
 	newbuffer.Extend(paddingLen)
-	newError("XtlsPadding ", contantLen, " ", paddingLen, " ", command).WriteToLog(session.ExportIDToError(ctx))
+	newError("XtlsPadding ", contentLen, " ", paddingLen, " ", command).WriteToLog(session.ExportIDToError(ctx))
 	return newbuffer
 }
 

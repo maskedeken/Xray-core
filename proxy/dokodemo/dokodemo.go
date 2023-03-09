@@ -4,18 +4,13 @@ package dokodemo
 
 import (
 	"context"
-	fmt "fmt"
-	"io"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
-	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
@@ -23,24 +18,8 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
-	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport/internet/stat"
-	"github.com/xtls/xray-core/transport/internet/xtls"
 )
-
-const (
-	//
-	muxCoolAddress = "v1.mux.cool"
-
-	// XRD is constant for XTLS direct mode
-	XRD = "xtls-rprx-direct"
-	// XRO is constant for XTLS origin mode
-	XRO = "xtls-rprx-origin"
-
-	defaultFlagValue = "NOT_DEFINED_AT_ALL"
-)
-
-var xtls_show bool
 
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
@@ -50,11 +29,6 @@ func init() {
 		})
 		return d, err
 	}))
-
-	xtlsShow := platform.NewEnvFlag("xray.dokodemo.xtls.show").GetValue(func() string { return defaultFlagValue })
-	if xtlsShow == "true" {
-		xtls_show = true
-	}
 }
 
 type DokodemoDoor struct {
@@ -104,13 +78,6 @@ type hasHandshakeAddress interface {
 // Process implements proxy.Inbound.
 func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn stat.Connection, dispatcher routing.Dispatcher) error {
 	newError("processing connection from: ", conn.RemoteAddr()).AtDebug().WriteToLog(session.ExportIDToError(ctx))
-
-	iConn := conn
-	statConn, ok := iConn.(*stat.CounterConnection)
-	if ok {
-		iConn = statConn.Connection
-	}
-
 	dest := net.Destination{
 		Network: network,
 		Address: d.address,
@@ -163,30 +130,6 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn st
 		return newError("failed to dispatch request").Base(err)
 	}
 
-	var rawConn syscall.RawConn
-	if dest.Network == net.Network_TCP {
-		switch d.config.Flow {
-		case XRO, XRD:
-			if dest.Address.Family().IsDomain() && dest.Address.Domain() == muxCoolAddress {
-				return newError(d.config.Flow + " doesn't support Mux").AtWarning()
-			}
-			if xtlsConn, ok := iConn.(*xtls.Conn); ok {
-				xtlsConn.RPRX = true
-				xtlsConn.SHOW = xtls_show
-				xtlsConn.MARK = "XTLS"
-				if d.config.Flow == XRD {
-					xtlsConn.DirectMode = true
-					if sc, ok := xtlsConn.NetConn().(syscall.Conn); ok {
-						rawConn, _ = sc.SyscallConn()
-					}
-				}
-			} else {
-				return newError(`failed to use ` + d.config.Flow + `, maybe "security" is not "xtls"`).AtWarning()
-			}
-		case "":
-		}
-	}
-
 	requestCount := int32(1)
 	requestDone := func() error {
 		defer func() {
@@ -201,19 +144,7 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn st
 		} else {
 			reader = buf.NewReader(conn)
 		}
-
-		var err error
-		if rawConn != nil {
-			var counter stats.Counter
-			if statConn != nil {
-				counter = statConn.ReadCounter
-			}
-			err = readV(reader, link.Writer, timer, iConn.(*xtls.Conn), rawConn, counter)
-		} else {
-			err = buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
-		}
-
-		if err != nil {
+		if err := buf.Copy(reader, link.Writer, buf.UpdateActivity(timer)); err != nil {
 			return newError("failed to transport request").Base(err)
 		}
 
@@ -376,39 +307,6 @@ func (w *PacketWriter) Close() error {
 		if conn != nil {
 			conn.Close()
 		}
-	}
-	return nil
-}
-
-func readV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, conn *xtls.Conn, rawConn syscall.RawConn, counter stats.Counter) error {
-	err := func() error {
-		var ct stats.Counter
-		for {
-			if conn.DirectIn {
-				conn.DirectIn = false
-				reader = buf.NewReadVReader(conn.NetConn(), rawConn, nil)
-				ct = counter
-				if conn.SHOW {
-					fmt.Println(conn.MARK, "ReadV")
-				}
-			}
-			buffer, err := reader.ReadMultiBuffer()
-			if !buffer.IsEmpty() {
-				if ct != nil {
-					ct.Add(int64(buffer.Len()))
-				}
-				timer.Update()
-				if werr := writer.WriteMultiBuffer(buffer); werr != nil {
-					return werr
-				}
-			}
-			if err != nil {
-				return err
-			}
-		}
-	}()
-	if err != nil && errors.Cause(err) != io.EOF {
-		return err
 	}
 	return nil
 }
