@@ -248,6 +248,9 @@ func (s *Server) handleMuxConnection(ctx context.Context, sessionPolicy policy.S
 	}
 	defer sess.Close() // nolint: errcheck
 
+	inbound := session.InboundFromContext(ctx)
+	user := inbound.User
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -275,7 +278,17 @@ func (s *Server) handleMuxConnection(ctx context.Context, sessionPolicy policy.S
 					return
 				}
 
-				s.handleConnection(ctx, sessionPolicy, destination, sConn, sConn, dispatcher, nil, nil, nil)
+				currentPacketCtx := ctx
+				if inbound.Source.IsValid() {
+					currentPacketCtx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
+						From:   inbound.Source,
+						To:     destination,
+						Status: log.AccessAccepted,
+						Reason: "",
+						Email:  user.Email,
+					})
+				}
+				s.handleConnection(currentPacketCtx, sessionPolicy, destination, sConn, sConn, dispatcher, nil, nil)
 			}()
 		}
 	}
