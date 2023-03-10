@@ -21,7 +21,6 @@ import (
 	httpheader "github.com/xtls/xray-core/transport/internet/headers/http"
 	"github.com/xtls/xray-core/transport/internet/http"
 	"github.com/xtls/xray-core/transport/internet/kcp"
-	"github.com/xtls/xray-core/transport/internet/obfs"
 	"github.com/xtls/xray-core/transport/internet/quic"
 	"github.com/xtls/xray-core/transport/internet/reality"
 	"github.com/xtls/xray-core/transport/internet/tcp"
@@ -281,28 +280,6 @@ func (c *DomainSocketConfig) Build() (proto.Message, error) {
 		Abstract: c.Abstract,
 		Padding:  c.Padding,
 	}, nil
-}
-
-type ObfsConfig struct {
-	Type string `json:"type"`
-	Host string `json:"host"`
-}
-
-// Build implements Buildable.
-func (c *ObfsConfig) Build() (proto.Message, error) {
-	obfsConfig := &obfs.Config{
-		Host: c.Host,
-	}
-
-	switch strings.ToLower(c.Type) {
-	case "", "http":
-		obfsConfig.Type = obfs.ObfsType_HTTP
-	case "tls":
-		obfsConfig.Type = obfs.ObfsType_TLS
-	default:
-		return nil, newError("invalid Obfuscation type").AtError()
-	}
-	return obfsConfig, nil
 }
 
 func readFileOrString(f string, s []string) ([]byte, error) {
@@ -624,8 +601,6 @@ func (p TransportProtocol) Build() (string, error) {
 		return "domainsocket", nil
 	case "quic":
 		return "quic", nil
-	case "obfs":
-		return "obfs", nil
 	case "grpc", "gun":
 		return "grpc", nil
 	default:
@@ -643,7 +618,7 @@ type SocketConfig struct {
 	TCPKeepAliveInterval int32       `json:"tcpKeepAliveInterval"`
 	TCPKeepAliveIdle     int32       `json:"tcpKeepAliveIdle"`
 	TCPCongestion        string      `json:"tcpCongestion"`
-	TCPWindowClamp       int32	 `json:"tcpWindowClamp"`
+	TCPWindowClamp       int32       `json:"tcpWindowClamp"`
 	V6only               bool        `json:"v6only"`
 	Interface            string      `json:"interface"`
 }
@@ -695,7 +670,7 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		TcpKeepAliveInterval: c.TCPKeepAliveInterval,
 		TcpKeepAliveIdle:     c.TCPKeepAliveIdle,
 		TcpCongestion:        c.TCPCongestion,
-		TcpWindowClamp:	      c.TCPWindowClamp,
+		TcpWindowClamp:       c.TCPWindowClamp,
 		V6Only:               c.V6only,
 		Interface:            c.Interface,
 	}, nil
@@ -712,7 +687,6 @@ type StreamConfig struct {
 	HTTPSettings    *HTTPConfig         `json:"httpSettings"`
 	DSSettings      *DomainSocketConfig `json:"dsSettings"`
 	QUICSettings    *QUICConfig         `json:"quicSettings"`
-	ObfsSettings    *ObfsConfig         `json:"obfsSettings"`
 	SocketSettings  *SocketConfig       `json:"sockopt"`
 	GRPCConfig      *GRPCConfig         `json:"grpcSettings"`
 	GUNConfig       *GRPCConfig         `json:"gunSettings"`
@@ -825,16 +799,6 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "quic",
 			Settings:     serial.ToTypedMessage(qs),
-		})
-	}
-	if c.ObfsSettings != nil {
-		os, err := c.ObfsSettings.Build()
-		if err != nil {
-			return nil, newError("Failed to build Obfuscation config").Base(err)
-		}
-		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
-			ProtocolName: "obfs",
-			Settings:     serial.ToTypedMessage(os),
 		})
 	}
 	if c.GRPCConfig == nil {

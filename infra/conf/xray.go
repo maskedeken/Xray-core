@@ -24,7 +24,6 @@ var (
 		"vless":         func() interface{} { return new(VLessInboundConfig) },
 		"vmess":         func() interface{} { return new(VMessInboundConfig) },
 		"trojan":        func() interface{} { return new(TrojanServerConfig) },
-		"snell":         func() interface{} { return new(SnellServerConfig) },
 		"mtproto":       func() interface{} { return new(MTProtoServerConfig) },
 	}, "protocol", "settings")
 
@@ -38,7 +37,6 @@ var (
 		"vless":       func() interface{} { return new(VLessOutboundConfig) },
 		"vmess":       func() interface{} { return new(VMessOutboundConfig) },
 		"trojan":      func() interface{} { return new(TrojanClientConfig) },
-		"snell":       func() interface{} { return new(SnellClientConfig) },
 		"mtproto":     func() interface{} { return new(MTProtoClientConfig) },
 		"dns":         func() interface{} { return new(DNSOutboundConfig) },
 		"wireguard":   func() interface{} { return new(WireGuardConfig) },
