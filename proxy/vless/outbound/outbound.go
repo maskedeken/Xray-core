@@ -135,13 +135,13 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		fallthrough
 	case vless.XRV:
 		switch request.Command {
-		case protocol.RequestCommandMux:
-			return newError(requestAddons.Flow + " doesn't support Mux").AtWarning()
 		case protocol.RequestCommandUDP:
 			if !allowUDP443 && request.Port == 443 {
-				return newError(requestAddons.Flow + " stopped UDP/443").AtInfo()
+				return newError("XTLS rejected UDP/443 traffic").AtInfo()
 			}
 			requestAddons.Flow = ""
+		case protocol.RequestCommandMux:
+			fallthrough // let server break Mux connections that contain TCP requests
 		case protocol.RequestCommandTCP:
 			var t reflect.Type
 			var p uintptr
@@ -158,7 +158,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 				t = reflect.TypeOf(realityConn.Conn).Elem()
 				p = uintptr(unsafe.Pointer(realityConn.Conn))
 			} else {
-				return newError("XTLS only supports TCP, mKCP and DomainSocket for now.").AtWarning()
+				return newError("XTLS only supports TLS and REALITY directly for now.").AtWarning()
 			}
 			if sc, ok := netConn.(syscall.Conn); ok {
 				rawConn, _ = sc.SyscallConn()
@@ -170,9 +170,20 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		}
 	}
 
+	var newCtx context.Context
+	var newCancel context.CancelFunc
+	if session.TimeoutOnlyFromContext(ctx) {
+		newCtx, newCancel = context.WithCancel(context.Background())
+	}
+
 	sessionPolicy := h.policyManager.ForLevel(request.User.Level)
 	ctx, cancel := context.WithCancel(ctx)
-	timer := signal.CancelAfterInactivity(ctx, cancel, sessionPolicy.Timeouts.ConnectionIdle)
+	timer := signal.CancelAfterInactivity(ctx, func() {
+		cancel()
+		if newCancel != nil {
+			newCancel()
+		}
+	}, sessionPolicy.Timeouts.ConnectionIdle)
 
 	clientReader := link.Reader // .(*pipe.Reader)
 	clientWriter := link.Writer // .(*pipe.Writer)
@@ -200,7 +211,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		// default: serverWriter := bufferWriter
 		serverWriter := encoding.EncodeBodyAddons(bufferWriter, request, requestAddons)
 		if request.Command == protocol.RequestCommandMux && request.Port == 666 {
-			serverWriter = xudp.NewPacketWriter(serverWriter, target)
+			serverWriter = xudp.NewPacketWriter(serverWriter, target, xudp.GetGlobalID(ctx))
 		}
 		userUUID := account.ID.Bytes()
 		timeoutReader, ok := clientReader.(buf.TimeoutReader)
@@ -287,7 +298,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 				counter = statConn.ReadCounter
 			}
 			err = encoding.XtlsRead(serverReader, clientWriter, timer, netConn, rawConn, input, rawInput, counter, ctx, account.ID.Bytes(),
-			&numberOfPacketToFilter, &enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello)
+				&numberOfPacketToFilter, &enableXtls, &isTLS12orAbove, &isTLS, &cipher, &remainingServerHello)
 		} else {
 			// from serverReader.ReadMultiBuffer to clientWriter.WriteMultiBufer
 			err = buf.Copy(serverReader, clientWriter, buf.UpdateActivity(timer))
@@ -298,6 +309,10 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		}
 
 		return nil
+	}
+
+	if newCtx != nil {
+		ctx = newCtx
 	}
 
 	if err := task.Run(ctx, postRequest, task.OnSuccess(getResponse, task.Close(clientWriter))); err != nil {

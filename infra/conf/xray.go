@@ -107,25 +107,27 @@ func (c *SniffingConfig) Build() (*proxyman.SniffingConfig, error) {
 }
 
 type MuxConfig struct {
-	Enabled     bool  `json:"enabled"`
-	Concurrency int16 `json:"concurrency"`
+	Enabled         bool   `json:"enabled"`
+	Concurrency     int16  `json:"concurrency"`
+	XudpConcurrency int16  `json:"xudpConcurrency"`
+	XudpProxyUDP443 string `json:"xudpProxyUDP443"`
 }
 
 // Build creates MultiplexingConfig, Concurrency < 0 completely disables mux.
-func (m *MuxConfig) Build() *proxyman.MultiplexingConfig {
-	if m.Concurrency < 0 {
-		return nil
+func (m *MuxConfig) Build() (*proxyman.MultiplexingConfig, error) {
+	switch m.XudpProxyUDP443 {
+	case "":
+		m.XudpProxyUDP443 = "reject"
+	case "reject", "allow", "skip":
+	default:
+		return nil, newError(`unknown "xudpProxyUDP443": `, m.XudpProxyUDP443)
 	}
-
-	var con uint32 = 8
-	if m.Concurrency > 0 {
-		con = uint32(m.Concurrency)
-	}
-
 	return &proxyman.MultiplexingConfig{
-		Enabled:     m.Enabled,
-		Concurrency: con,
-	}
+		Enabled:         m.Enabled,
+		Concurrency:     int32(m.Concurrency),
+		XudpConcurrency: int32(m.XudpConcurrency),
+		XudpProxyUDP443: m.XudpProxyUDP443,
+	}, nil
 }
 
 type InboundDetourAllocationConfig struct {
@@ -339,7 +341,11 @@ func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 	}
 
 	if c.MuxSettings != nil {
-		senderSettings.MultiplexSettings = c.MuxSettings.Build()
+		ms, err := c.MuxSettings.Build()
+		if err != nil {
+			return nil, newError("failed to build Mux config.").Base(err)
+		}
+		senderSettings.MultiplexSettings = ms
 	}
 
 	settings := []byte("{}")
