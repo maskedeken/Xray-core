@@ -302,6 +302,7 @@ func (s *Server) handleUDPPayload(ctx context.Context, clientReader *PacketReade
 		if udpPayload.UDP == nil {
 			udpPayload.UDP = &packet.Source
 		}
+
 		if err := clientWriter.WriteMultiBuffer(buf.MultiBuffer{udpPayload}); err != nil {
 			newError("failed to write response").Base(err).AtWarning().WriteToLog(session.ExportIDToError(ctx))
 		}
