@@ -14,6 +14,8 @@ import (
 	"github.com/xtls/xray-core/common/drain"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
+
+	mRand "math/rand"
 )
 
 const (
@@ -138,6 +140,9 @@ func WriteTCPRequest(request *protocol.RequestHeader, writer io.Writer) (buf.Wri
 	if account.Cipher.IVSize() > 0 {
 		iv = make([]byte, account.Cipher.IVSize())
 		common.Must2(rand.Read(iv))
+		if account.ReducedIvHeadEntropy {
+			RemapToPrintable(iv)
+		}
 		if ivError := account.CheckIV(iv); ivError != nil {
 			return nil, newError("failed to mark outgoing iv").Base(ivError)
 		}
@@ -347,4 +352,12 @@ func (w *UDPWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 		}
 	}
 	return nil
+}
+
+func RemapToPrintable(input []byte) {
+	const charSet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\\\""
+	seed := mRand.New(mRand.NewSource(int64(crc32.ChecksumIEEE(input))))
+	for i := range input {
+		input[i] = charSet[seed.Intn(len(charSet))]
+	}
 }
