@@ -31,8 +31,8 @@
   - [Marzban](https://github.com/Gozargah/Marzban)
   - [Libertea](https://github.com/VZiChoushaDui/Libertea)
 - One Click
-  - [Xray-script](https://github.com/kirin10000/Xray-script), [Xray-REALITY](https://github.com/zxcvos/Xray-script), [LetsXray](https://github.com/tdjnodj/LetsXray)
-  - [XTool](https://github.com/LordPenguin666/XTool), [Xray_bash_onekey](https://github.com/hello-yunshu/Xray_bash_onekey), [xray-reality](https://github.com/sajjaddg/xray-reality)
+  - [Xray-REALITY](https://github.com/zxcvos/Xray-script), [xray-reality](https://github.com/sajjaddg/xray-reality), [reality-ezpz](https://github.com/aleskxyz/reality-ezpz)
+  - [Xray-script](https://github.com/kirin10000/Xray-script), [Xray_bash_onekey](https://github.com/hello-yunshu/Xray_bash_onekey), [XTool](https://github.com/LordPenguin666/XTool)
   - [v2ray-agent](https://github.com/mack-a/v2ray-agent), [Xray_onekey](https://github.com/wulabing/Xray_onekey), [ProxySU](https://github.com/proxysu/ProxySU)
 - Magisk
   - [Xray4Magisk](https://github.com/Asterisk4Magisk/Xray4Magisk)
@@ -63,27 +63,30 @@
   - [luci-app-xray](https://github.com/yichya/luci-app-xray) ([openwrt-xray](https://github.com/yichya/openwrt-xray))
 - Windows
   - [v2rayN](https://github.com/2dust/v2rayN)
+  - [HiddifyN](https://github.com/hiddify/HiddifyN)
   - [Invisible Man - Xray](https://github.com/InvisibleManVPN/InvisibleMan-XRayClient)
 - Android
   - [v2rayNG](https://github.com/2dust/v2rayNG)
+  - [HiddifyNG](https://github.com/hiddify/HiddifyNG)
   - [X-flutter](https://github.com/XTLS/X-flutter)
 - iOS & macOS arm64
   - [Mango](https://github.com/arror/Mango)
-  - [Wings X](https://apps.apple.com/app/wings-x/id6446119727)
+  - [FoXray](https://apps.apple.com/app/foxray/id6448898396)
 - macOS arm64 & x64
   - [V2RayXS](https://github.com/tzmax/V2RayXS)
-  - [Wings X](https://apps.apple.com/app/wings-x/id6446119727)
+  - [FoXray](https://apps.apple.com/app/foxray/id6448898396)
+- Linux
+  - [v2rayA](https://github.com/v2rayA/v2rayA)
 
 ## Others that support VLESS, XTLS, REALITY, XUDP, PLUX...
 
 - iOS & macOS arm64
   - [Shadowrocket](https://apps.apple.com/app/shadowrocket/id932747118)
-  - [Stash](https://apps.apple.com/app/stash/id1596063349)
 - Xray Wrapper
+  - [XTLS/libXray](https://github.com/XTLS/libXray)
   - [xtlsapi](https://github.com/hiddify/xtlsapi)
   - [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite)
   - [XrayKit](https://github.com/arror/XrayKit)
-  - [libxray](https://github.com/KouYiGuo/libxray)
 - [XrayR](https://github.com/XrayR-project/XrayR)
   - [XrayR-release](https://github.com/XrayR-project/XrayR-release)
   - [XrayR-V2Board](https://github.com/missuo/XrayR-V2Board)
@@ -103,23 +106,8 @@
 
 ## Credits
 
-This repo relies on the following third-party projects:
-
-- Special thanks:
-  - [v2fly/v2ray-core](https://github.com/v2fly/v2ray-core)
-- In production:
-  - [ghodss/yaml](https://github.com/ghodss/yaml)
-  - [gorilla/websocket](https://github.com/gorilla/websocket)
-  - [quic-go/quic-go](https://github.com/quic-go/quic-go)
-  - [pelletier/go-toml](https://github.com/pelletier/go-toml)
-  - [pires/go-proxyproto](https://github.com/pires/go-proxyproto)
-  - [refraction-networking/utls](https://github.com/refraction-networking/utls)
-  - [seiflotfy/cuckoofilter](https://github.com/seiflotfy/cuckoofilter)
-  - [google/starlark-go](https://github.com/google/starlark-go)
-- For testing only:
-  - [miekg/dns](https://github.com/miekg/dns)
-  - [stretchr/testify](https://github.com/stretchr/testify)
-  - [h12w/socks](https://github.com/h12w/socks)
+- [Xray-core v1.0.0](https://github.com/XTLS/Xray-core/releases/tag/v1.0.0) was forked from [v2fly-core 9a03cc5](https://github.com/v2fly/v2ray-core/commit/9a03cc5c98d04cc28320fcee26dbc236b3291256), and we have made & accumulated a huge number of enhancements over time, check [the release notes for each version](https://github.com/XTLS/Xray-core/releases).
+- For third-party projects used in [Xray-core](https://github.com/XTLS/Xray-core), check your local or [the latest go.mod](https://github.com/XTLS/Xray-core/blob/main/go.mod).
 
 ## Compilation
 
