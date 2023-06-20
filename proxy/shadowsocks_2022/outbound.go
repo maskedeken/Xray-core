@@ -51,6 +51,8 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 		if err != nil {
 			return nil, newError("create method").Base(err)
 		}
+
+		method.ReducedIVEntropy(config.ReducedIvHeadEntropy)
 		o.method = method
 	} else {
 		return nil, newError("unknown method ", config.Method)

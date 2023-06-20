@@ -32,6 +32,8 @@ require (
 	lukechampine.com/blake3 v1.1.7
 )
 
+replace github.com/sagernet/sing-shadowsocks => ../sing-shadowsocks
+
 require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

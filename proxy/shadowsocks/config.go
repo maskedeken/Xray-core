@@ -19,8 +19,9 @@ import (
 
 // MemoryAccount is an account type converted from Account.
 type MemoryAccount struct {
-	Cipher Cipher
-	Key    []byte
+	Cipher               Cipher
+	Key                  []byte
+	ReducedIvHeadEntropy bool
 
 	replayFilter antireplay.GeneralizedReplayFilter
 }
@@ -105,8 +106,9 @@ func (a *Account) AsAccount() (protocol.Account, error) {
 		return nil, newError("failed to get cipher").Base(err)
 	}
 	return &MemoryAccount{
-		Cipher: Cipher,
-		Key:    passwordToCipherKey([]byte(a.Password), Cipher.KeySize()),
+		Cipher:               Cipher,
+		Key:                  passwordToCipherKey([]byte(a.Password), Cipher.KeySize()),
+		ReducedIvHeadEntropy: a.ReducedIvHeadEntropy,
 		replayFilter: func() antireplay.GeneralizedReplayFilter {
 			if a.IvCheck {
 				return antireplay.NewBloomRing()
