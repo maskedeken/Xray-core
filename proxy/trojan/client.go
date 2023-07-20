@@ -125,18 +125,21 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		}
 
 		// write some request payload to buffer
-		if err = buf.CopyOnceTimeout(link.Reader, bodyWriter, time.Millisecond*100); err != nil && err != buf.ErrNotTimeoutReader && err != buf.ErrReadTimeout {
+		err = buf.CopyOnceTimeout(link.Reader, bodyWriter, time.Millisecond*100)
+		switch err {
+		case buf.ErrNotTimeoutReader, buf.ErrReadTimeout:
+			// Send header if not sent yet
+			if _, err = connWriter.Write([]byte{}); err != nil {
+				return err.(*errors.Error).AtWarning()
+			}
+		case nil:
+		default:
 			return newError("failed to write A request payload").Base(err).AtWarning()
 		}
 
 		// Flush; bufferWriter.WriteMultiBufer now is bufferWriter.writer.WriteMultiBuffer
 		if err = bufferWriter.SetBuffered(false); err != nil {
 			return newError("failed to flush payload").Base(err).AtWarning()
-		}
-
-		// Send header if not sent yet
-		if _, err = connWriter.Write([]byte{}); err != nil {
-			return err.(*errors.Error).AtWarning()
 		}
 
 		if err = buf.Copy(link.Reader, bodyWriter, buf.UpdateActivity(timer)); err != nil {
