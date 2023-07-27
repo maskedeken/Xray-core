@@ -12,6 +12,7 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/dice"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/retry"
 	"github.com/xtls/xray-core/common/session"
@@ -63,6 +64,16 @@ func (h *Handler) policy() policy.Session {
 }
 
 func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Address) net.Address {
+	ips, err := h.resolveIPs(ctx, domain, localAddr)
+	if err != nil {
+		err.(*errors.Error).WriteToLog(session.ExportIDToError(ctx))
+		return nil
+	}
+
+	return net.IPAddress(ips[dice.Roll(len(ips))])
+}
+
+func (h *Handler) resolveIPs(ctx context.Context, domain string, localAddr net.Address) ([]net.IP, error) {
 	var option dns.IPOption = dns.IPOption{
 		IPv4Enable: true,
 		IPv6Enable: true,
@@ -84,12 +95,12 @@ func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Ad
 
 	ips, err := h.dns.LookupIP(domain, option)
 	if err != nil {
-		newError("failed to get IP address for domain ", domain).Base(err).WriteToLog(session.ExportIDToError(ctx))
+		return nil, newError("failed to get IP address for domain ", domain).Base(err)
 	}
 	if len(ips) == 0 {
-		return nil
+		return nil, newError("failed to get IP address for domain ", domain)
 	}
-	return net.IPAddress(ips[dice.Roll(len(ips))])
+	return ips, nil
 }
 
 func isValidAddress(addr *net.IPOrDomain) bool {
@@ -121,18 +132,30 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		}
 	}
 
+	var r *session.Resolved
+	if h.config.useIP() && destination.Address.Family().IsDomain() {
+		ips, err := h.resolveIPs(ctx, destination.Address.Domain(), dialer.Address())
+		if err != nil {
+			return err
+		}
+
+		r = &session.Resolved{
+			IPs: ips,
+		}
+	}
+
 	input := link.Reader
 	output := link.Writer
 
 	var conn stat.Connection
 	err := retry.ExponentialBackoff(5, 100).On(func() error {
 		dialDest := destination
-		if h.config.useIP() && dialDest.Address.Family().IsDomain() {
-			ip := h.resolveIP(ctx, dialDest.Address.Domain(), dialer.Address())
+		if r != nil {
+			ip := r.CurrentIP()
 			if ip != nil {
 				dialDest = net.Destination{
 					Network: dialDest.Network,
-					Address: ip,
+					Address: net.IPAddress(ip),
 					Port:    dialDest.Port,
 				}
 				newError("dialing to ", dialDest).WriteToLog(session.ExportIDToError(ctx))
@@ -141,6 +164,9 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 		rawConn, err := dialer.Dial(ctx, dialDest)
 		if err != nil {
+			if r != nil {
+				r.NextIP()
+			}
 			return err
 		}
 		conn = rawConn

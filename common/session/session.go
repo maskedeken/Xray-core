@@ -4,6 +4,8 @@ package session // import "github.com/xtls/xray-core/common/session"
 import (
 	"context"
 	"math/rand"
+	"sync"
+	"time"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -58,7 +60,8 @@ type Outbound struct {
 	Target      net.Destination
 	RouteTarget net.Destination
 	// Gateway address
-	Gateway net.Address
+	Gateway  net.Address
+	Resolved *Resolved
 }
 
 // SniffingRequest controls the behavior of content sniffing.
@@ -102,4 +105,48 @@ func (c *Content) Attribute(name string) string {
 		return ""
 	}
 	return c.Attributes[name]
+}
+
+type Resolved struct {
+	IPs          []net.IP
+	ipIdx        uint8
+	ipLock       sync.Mutex
+	lastSwitched time.Time
+}
+
+// NextIP switch to another resolved result.
+// there still be race-condition here if multiple err concurently occured
+// may cause idx keep switching,
+// but that's an outside error can hardly handled here
+func (r *Resolved) NextIP() {
+	r.ipLock.Lock()
+	defer r.ipLock.Unlock()
+
+	if len(r.IPs) > 1 {
+
+		// throttle, don't switch too quickly
+		now := time.Now()
+		if now.Sub(r.lastSwitched) < time.Second*5 {
+			return
+		}
+		r.lastSwitched = now
+		r.ipIdx++
+
+	} else {
+		return
+	}
+
+	if r.ipIdx >= uint8(len(r.IPs)) {
+		r.ipIdx = 0
+	}
+}
+
+func (r *Resolved) CurrentIP() net.IP {
+	r.ipLock.Lock()
+	defer r.ipLock.Unlock()
+	if len(r.IPs) > 0 {
+		return r.IPs[r.ipIdx]
+	}
+
+	return nil
 }
