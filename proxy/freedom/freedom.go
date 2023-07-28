@@ -80,17 +80,9 @@ func (h *Handler) resolveIPs(ctx context.Context, domain string, localAddr net.A
 		FakeEnable: false,
 	}
 	if h.config.DomainStrategy == Config_USE_IP4 || (localAddr != nil && localAddr.Family().IsIPv4()) {
-		option = dns.IPOption{
-			IPv4Enable: true,
-			IPv6Enable: false,
-			FakeEnable: false,
-		}
+		option.IPv6Enable = false
 	} else if h.config.DomainStrategy == Config_USE_IP6 || (localAddr != nil && localAddr.Family().IsIPv6()) {
-		option = dns.IPOption{
-			IPv4Enable: false,
-			IPv6Enable: true,
-			FakeEnable: false,
-		}
+		option.IPv4Enable = false
 	}
 
 	ips, err := h.dns.LookupIP(domain, option)
