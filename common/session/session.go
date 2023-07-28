@@ -5,7 +5,6 @@ import (
 	"context"
 	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -108,10 +107,9 @@ func (c *Content) Attribute(name string) string {
 }
 
 type Resolved struct {
-	IPs          []net.IP
-	ipIdx        uint8
-	ipLock       sync.Mutex
-	lastSwitched time.Time
+	IPs    []net.IP
+	ipIdx  uint8
+	ipLock sync.Mutex
 }
 
 // NextIP switch to another resolved result.
@@ -123,15 +121,7 @@ func (r *Resolved) NextIP() {
 	defer r.ipLock.Unlock()
 
 	if len(r.IPs) > 1 {
-
-		// throttle, don't switch too quickly
-		now := time.Now()
-		if now.Sub(r.lastSwitched) < time.Second*5 {
-			return
-		}
-		r.lastSwitched = now
 		r.ipIdx++
-
 	} else {
 		return
 	}
@@ -139,6 +129,8 @@ func (r *Resolved) NextIP() {
 	if r.ipIdx >= uint8(len(r.IPs)) {
 		r.ipIdx = 0
 	}
+
+	newError("switch to next IP: ", r.IPs[r.ipIdx]).AtDebug().WriteToLog()
 }
 
 func (r *Resolved) CurrentIP() net.IP {
