@@ -289,7 +289,7 @@ func (s *Server) handleMuxConnection(ctx context.Context, sessionPolicy policy.S
 						Email:  user.Email,
 					})
 				}
-				s.handleConnection(currentPacketCtx, sessionPolicy, destination, sConn, sConn, dispatcher, nil, nil)
+				s.handleConnection(currentPacketCtx, sessionPolicy, destination, sConn, sConn, dispatcher)
 			}()
 		}
 	}
