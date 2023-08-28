@@ -32,7 +32,6 @@ type ConnWriter struct {
 	io.Writer
 	Target     net.Destination
 	Account    *MemoryAccount
-	Flow       string
 	headerSent bool
 }
 
