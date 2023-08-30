@@ -18,7 +18,7 @@ require (
 	github.com/seiflotfy/cuckoofilter v0.0.0-20220411075957-e3b120b3f5fb
 	github.com/stretchr/testify v1.8.4
 	github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e
-	github.com/xtls/reality v0.0.0-20230613075828-e07c3b04b983
+	github.com/xtls/reality v0.0.0-20230828171259-e426190d57f6
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925
 	golang.org/x/crypto v0.12.0
 	golang.org/x/net v0.14.0
