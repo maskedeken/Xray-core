@@ -151,6 +151,17 @@ func (c *PacketConnWrapper) SetWriteDeadline(t time.Time) error {
 	return c.Conn.SetWriteDeadline(t)
 }
 
+func ApplySockopt(ctx context.Context, dest net.Destination, fd uintptr, sockopt *SocketConfig) {
+	if err := applyOutboundSocketOptions(dest.Network.String(), dest.Address.String(), fd, sockopt); err != nil {
+		newError("failed to apply socket options").Base(err).WriteToLog(session.ExportIDToError(ctx))
+	}
+	if dest.Network == net.Network_UDP && hasBindAddr(sockopt) {
+		if err := bindAddr(fd, sockopt.BindAddress, sockopt.BindPort); err != nil {
+			newError("failed to bind source address to ", sockopt.BindAddress).Base(err).WriteToLog(session.ExportIDToError(ctx))
+		}
+	}
+}
+
 type SystemDialerAdapter interface {
 	Dial(network string, address string) (net.Conn, error)
 }
