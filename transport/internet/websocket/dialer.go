@@ -4,42 +4,20 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
-	"fmt"
 	"io"
 	gonet "net"
 	"net/http"
-	"os"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/xtaci/smux"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 )
-
-type dialerConf struct {
-	net.Destination
-	streamSettings *internet.MemoryStreamConfig
-}
-
-type muxSession struct {
-	conf         dialerConf
-	client       *smux.Session
-	underlayConn net.Conn
-}
-
-type muxPool struct {
-	sync.Mutex
-	sessions map[dialerConf]*muxSession
-}
-
-var pool = muxPool{sessions: make(map[dialerConf]*muxSession)}
 
 //go:embed dialer.html
 var webpage []byte
@@ -47,14 +25,15 @@ var webpage []byte
 var conns chan *websocket.Conn
 
 func init() {
-	if addr := os.Getenv("XRAY_BROWSER_DIALER"); addr != "" {
+	addr := platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
+	if addr != "" {
 		conns = make(chan *websocket.Conn, 256)
 		go http.ListenAndServe(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/websocket" {
 				if conn, err := upgrader.Upgrade(w, r, nil); err == nil {
 					conns <- conn
 				} else {
-					fmt.Println("unexpected error")
+					newError("Browser dialer http upgrade unexpected error").AtError().WriteToLog()
 				}
 			} else {
 				w.Write(webpage)
@@ -65,52 +44,7 @@ func init() {
 
 // Dial dials a WebSocket connection to the given destination.
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
-	wsSettings := streamSettings.ProtocolSettings.(*Config)
-	if !wsSettings.Mux {
-		newError("creating connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
-		conn, err := dialWebSocket(ctx, dest, streamSettings)
-		return stat.Connection(conn), err
-	}
-
-	newError("creating mux connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
-
-	createNewMuxConn := func(sess *muxSession) (stat.Connection, error) {
-		stream, err := sess.client.OpenStream()
-		if err != nil {
-			sess.underlayConn.Close()
-			sess.client.Close()
-			delete(pool.sessions, sess.conf)
-			return nil, newError("failed to open mux stream").Base(err)
-		}
-
-		return stat.Connection(stream), nil
-	}
-
-	pool.Lock()
-	defer pool.Unlock()
-	conf := dialerConf{dest, streamSettings}
-	sess, ok := pool.sessions[conf]
-	if ok && !sess.client.IsClosed() {
-		return createNewMuxConn(sess)
-	}
-
-	conn, err := dialWebSocket(ctx, dest, streamSettings)
-	if err != nil {
-		return nil, err
-	}
-
-	smuxConfig := smux.DefaultConfig()
-	client, err := smux.Client(conn, smuxConfig)
-	if err != nil {
-		return nil, newError("failed to create mux session").Base(err)
-	}
-
-	sess = &muxSession{conf: conf, client: client, underlayConn: conn}
-	pool.sessions[conf] = sess
-	return createNewMuxConn(sess)
-}
-
-func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
+	newError("creating connection to ", dest).WriteToLog(session.ExportIDToError(ctx))
 	var conn net.Conn
 	if streamSettings.ProtocolSettings.(*Config).Ed > 0 {
 		ctx, cancel := context.WithCancel(ctx)
@@ -123,18 +57,18 @@ func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *in
 		}
 	} else {
 		var err error
-		if conn, err = dialConn(ctx, dest, streamSettings, nil); err != nil {
+		if conn, err = dialWebSocket(ctx, dest, streamSettings, nil); err != nil {
 			return nil, newError("failed to dial WebSocket").Base(err)
 		}
 	}
-	return conn, nil
+	return stat.Connection(conn), nil
 }
 
 func init() {
 	common.Must(internet.RegisterTransportDialer(protocolName, Dial))
 }
 
-func dialConn(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, ed []byte) (net.Conn, error) {
+func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, ed []byte) (net.Conn, error) {
 	wsSettings := streamSettings.ProtocolSettings.(*Config)
 
 	dialer := &websocket.Dialer{
@@ -245,7 +179,7 @@ func (d *delayDialConn) Write(b []byte) (int, error) {
 			ed = nil
 		}
 		var err error
-		if d.Conn, err = dialConn(d.ctx, d.dest, d.streamSettings, ed); err != nil {
+		if d.Conn, err = dialWebSocket(d.ctx, d.dest, d.streamSettings, ed); err != nil {
 			d.Close()
 			return 0, newError("failed to dial WebSocket").Base(err)
 		}

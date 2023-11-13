@@ -21,23 +21,18 @@ import (
 var (
 	Version_x byte = 1
 	Version_y byte = 8
-	Version_z byte = 4
+	Version_z byte = 5
 )
 
 var (
 	build    = "Custom"
 	codename = "Xray, Penetrates Everything."
 	intro    = "A unified platform for anti-censorship."
-	rev      = ""
 )
 
 // Version returns Xray's version as a string, in the form of "x.y.z" where x, y and z are numbers.
 // ".z" part may be omitted in regular releases.
 func Version() string {
-	if len(rev) != 0 {
-		return fmt.Sprintf("%v.%v.%v-%s", Version_x, Version_y, Version_z, rev)
-	}
-
 	return fmt.Sprintf("%v.%v.%v", Version_x, Version_y, Version_z)
 }
 

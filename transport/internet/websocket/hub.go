@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/xtaci/smux"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	http_proto "github.com/xtls/xray-core/common/protocol/http"
@@ -25,7 +23,6 @@ import (
 type requestHandler struct {
 	path string
 	ln   *Listener
-	mux  bool
 }
 
 var replacer = strings.NewReplacer("+", "-", "/", "_", "=", "")
@@ -69,32 +66,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		}
 	}
 
-	c := newConnection(conn, remoteAddr, extraReader)
-	if !h.mux {
-		h.ln.addConn(c)
-		return
-	}
-	h.serveMUX(c) // handle mux session
-}
-
-func (h *requestHandler) serveMUX(conn *connection) {
-	smuxConfig := smux.DefaultConfig()
-	session, err := smux.Server(conn, smuxConfig)
-	if err != nil {
-		newError("failed to create mux session").Base(err).WriteToLog()
-		return
-	}
-
-	defer session.Close()
-	for {
-		stream, err := session.AcceptStream()
-		if err != nil {
-			newError("mux session ends").Base(err).AtInfo().WriteToLog()
-			return
-		}
-
-		h.ln.addConn(stream)
-	}
+	h.ln.addConn(newConnection(conn, remoteAddr, extraReader))
 }
 
 type Listener struct {
@@ -155,7 +127,6 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		Handler: &requestHandler{
 			path: wsSettings.GetNormalizedPath(),
 			ln:   l,
-			mux:  wsSettings.Mux,
 		},
 		ReadHeaderTimeout: time.Second * 4,
 		MaxHeaderBytes:    4096,

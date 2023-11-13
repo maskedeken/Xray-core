@@ -22,7 +22,4 @@ message Config {
   bool accept_proxy_protocol = 4;
 
   uint32 ed = 5;
-
-  // enable mux
-  bool mux = 6;
 }
