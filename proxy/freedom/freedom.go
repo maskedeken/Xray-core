@@ -14,6 +14,7 @@ import (
 	"github.com/xtls/xray-core/common/dice"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/retry"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
@@ -22,10 +23,13 @@ import (
 	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/stats"
+	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 )
+
+var useSplice bool
 
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
@@ -37,6 +41,12 @@ func init() {
 		}
 		return h, nil
 	}))
+	const defaultFlagValue = "NOT_DEFINED_AT_ALL"
+	value := platform.NewEnvFlag(platform.UseFreedomSplice).GetValue(func() string { return defaultFlagValue })
+	switch value {
+	case defaultFlagValue, "auto", "enable":
+		useSplice = true
+	}
 }
 
 // Handler handles Freedom connections.
@@ -74,18 +84,18 @@ func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Ad
 }
 
 func (h *Handler) resolveIPs(ctx context.Context, domain string, localAddr net.Address) ([]net.IP, error) {
-	var option dns.IPOption = dns.IPOption{
-		IPv4Enable: true,
-		IPv6Enable: true,
-		FakeEnable: false,
+	ips, err := h.dns.LookupIP(domain, dns.IPOption{
+		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
+		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && h.config.preferIP6(),
+	})
+	{ // Resolve fallback
+		if (len(ips) == 0 || err != nil) && h.config.hasFallback() && localAddr == nil {
+			ips, err = h.dns.LookupIP(domain, dns.IPOption{
+				IPv4Enable: h.config.fallbackIP4(),
+				IPv6Enable: h.config.fallbackIP6(),
+			})
+		}
 	}
-	if h.config.DomainStrategy == Config_USE_IP4 || (localAddr != nil && localAddr.Family().IsIPv4()) {
-		option.IPv6Enable = false
-	} else if h.config.DomainStrategy == Config_USE_IP6 || (localAddr != nil && localAddr.Family().IsIPv6()) {
-		option.IPv4Enable = false
-	}
-
-	ips, err := h.dns.LookupIP(domain, option)
 	if err != nil {
 		return nil, newError("failed to get IP address for domain ", domain).Base(err)
 	}
@@ -110,6 +120,11 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	if outbound == nil || !outbound.Target.IsValid() {
 		return newError("target not specified.")
 	}
+	outbound.Name = "freedom"
+	inbound := session.InboundFromContext(ctx)
+	if inbound != nil {
+		inbound.SetCanSpliceCopy(1)
+	}
 	destination := outbound.Target
 	UDPOverride := net.UDPDestination(nil, 0)
 	if h.config.DestinationOverride != nil {
@@ -125,7 +140,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	}
 
 	var r *session.Resolved
-	if h.config.useIP() && destination.Address.Family().IsDomain() {
+	if h.config.hasStrategy() && destination.Address.Family().IsDomain() {
 		ips, err := h.resolveIPs(ctx, destination.Address.Domain(), dialer.Address())
 		if err != nil {
 			return err
@@ -151,6 +166,8 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 					Port:    dialDest.Port,
 				}
 				newError("dialing to ", dialDest).WriteToLog(session.ExportIDToError(ctx))
+			} else if h.config.forceIP() {
+				return dns.ErrEmptyResponse
 			}
 		}
 
@@ -213,17 +230,17 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 	responseDone := func() error {
 		defer timer.SetTimeout(plcy.Timeouts.UplinkOnly)
-
-		var reader buf.Reader
 		if destination.Network == net.Network_TCP {
-			reader = buf.NewReader(conn)
-		} else {
-			reader = NewPacketReader(conn, UDPOverride)
+			var writeConn net.Conn
+			if inbound := session.InboundFromContext(ctx); inbound != nil && inbound.Conn != nil && useSplice {
+				writeConn = inbound.Conn
+			}
+			return proxy.CopyRawConnIfExist(ctx, conn, writeConn, link.Writer, timer)
 		}
+		reader := NewPacketReader(conn, UDPOverride)
 		if err := buf.Copy(reader, output, buf.UpdateActivity(timer)); err != nil {
 			return newError("failed to process response").Base(err)
 		}
-
 		return nil
 	}
 
@@ -328,7 +345,7 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 			if w.UDPOverride.Port != 0 {
 				b.UDP.Port = w.UDPOverride.Port
 			}
-			if w.Handler.config.useIP() && b.UDP.Address.Family().IsDomain() {
+			if w.Handler.config.hasStrategy() && b.UDP.Address.Family().IsDomain() {
 				ip := w.Handler.resolveIP(w.Context, b.UDP.Address.Domain(), nil)
 				if ip != nil {
 					b.UDP.Address = ip
