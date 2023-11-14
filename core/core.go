@@ -14,6 +14,7 @@ package core
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 
 	"github.com/xtls/xray-core/common/serial"
 )
@@ -33,6 +34,23 @@ var (
 // Version returns Xray's version as a string, in the form of "x.y.z" where x, y and z are numbers.
 // ".z" part may be omitted in regular releases.
 func Version() string {
+	var rev string
+	debugInfo, loaded := debug.ReadBuildInfo()
+	if loaded {
+		for _, setting := range debugInfo.Settings {
+			if setting.Key == "vcs.revision" {
+				rev = setting.Value
+				break
+			}
+		}
+	}
+
+	if len(rev) != 0 {
+		if len(rev) > 7 {
+			rev = rev[:7]
+		}
+		return fmt.Sprintf("%v.%v.%v-%v", Version_x, Version_y, Version_z, rev)
+	}
 	return fmt.Sprintf("%v.%v.%v", Version_x, Version_y, Version_z)
 }
 
