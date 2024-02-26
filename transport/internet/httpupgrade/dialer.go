@@ -30,7 +30,7 @@ func dialhttpUpgrade(ctx context.Context, dest net.Destination, streamSettings *
 		tlsConfig := config.GetTLSConfig(tls.WithDestination(dest), tls.WithNextProto("http/1.1"))
 		if fingerprint := tls.GetFingerprint(config.Fingerprint); fingerprint != nil {
 			conn = tls.UClient(pconn, tlsConfig, fingerprint)
-			if err := conn.(*tls.UConn).WebsocketHandshake(); err != nil {
+			if err := conn.(*tls.UConn).WebsocketHandshakeContext(ctx); err != nil {
 				return nil, err
 			}
 		} else {
