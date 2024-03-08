@@ -75,7 +75,7 @@ func (h *Handler) policy() policy.Session {
 }
 
 func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Address) net.Address {
-	ips, err := h.resolveIPs(ctx, domain, localAddr)
+	ips, err := h.resolveIPs(domain, localAddr)
 	if err != nil {
 		err.(*errors.Error).WriteToLog(session.ExportIDToError(ctx))
 		return nil
@@ -84,7 +84,7 @@ func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Ad
 	return net.IPAddress(ips[dice.Roll(len(ips))])
 }
 
-func (h *Handler) resolveIPs(ctx context.Context, domain string, localAddr net.Address) ([]net.IP, error) {
+func (h *Handler) resolveIPs(domain string, localAddr net.Address) ([]net.IP, error) {
 	ips, err := h.dns.LookupIP(domain, dns.IPOption{
 		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
 		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && h.config.preferIP6(),
@@ -142,7 +142,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 	var r *session.Resolved
 	if h.config.hasStrategy() && destination.Address.Family().IsDomain() {
-		ips, err := h.resolveIPs(ctx, destination.Address.Domain(), dialer.Address())
+		ips, err := h.resolveIPs(destination.Address.Domain(), dialer.Address())
 		if err != nil {
 			return err
 		}
@@ -160,16 +160,14 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		dialDest := destination
 		if r != nil {
 			ip := r.CurrentIP()
-			if ip != nil {
-				dialDest = net.Destination{
-					Network: dialDest.Network,
-					Address: net.IPAddress(ip),
-					Port:    dialDest.Port,
-				}
-				newError("dialing to ", dialDest).WriteToLog(session.ExportIDToError(ctx))
-			} else if h.config.forceIP() {
-				return dns.ErrEmptyResponse
+			dialDest = net.Destination{
+				Network: dialDest.Network,
+				Address: net.IPAddress(ip),
+				Port:    dialDest.Port,
 			}
+			newError("dialing to ", dialDest).WriteToLog(session.ExportIDToError(ctx))
+		} else if h.config.forceIP() {
+			return dns.ErrEmptyResponse
 		}
 
 		rawConn, err := dialer.Dial(ctx, dialDest)
