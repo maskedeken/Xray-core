@@ -13,7 +13,6 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/dice"
-	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/retry"
@@ -74,17 +73,32 @@ func (h *Handler) policy() policy.Session {
 	return p
 }
 
-func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Address) net.Address {
-	ips, err := h.resolveIPs(domain, localAddr)
-	if err != nil {
-		err.(*errors.Error).WriteToLog(session.ExportIDToError(ctx))
-		return nil
+func (h *Handler) lookupIP(domain string, localAddr net.Address) (ips []net.IP) {
+	var resolvedIPs []net.IP
+	resolvedIPs, _ = h.dns.LookupIP(domain, dns.IPOption{
+		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
+		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && h.config.preferIP6(),
+	})
+	if len(resolvedIPs) > 0 {
+		ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
 	}
 
-	return net.IPAddress(ips[dice.Roll(len(ips))])
+	{ // Resolve fallback
+		if localAddr == nil && h.config.hasFallback() {
+			resolvedIPs, _ = h.dns.LookupIP(domain, dns.IPOption{
+				IPv4Enable: h.config.fallbackIP4(),
+				IPv6Enable: h.config.fallbackIP6(),
+			})
+			if len(resolvedIPs) > 0 {
+				ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
+			}
+		}
+	}
+
+	return
 }
 
-func (h *Handler) resolveIPs(domain string, localAddr net.Address) ([]net.IP, error) {
+func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Address) net.Address {
 	ips, err := h.dns.LookupIP(domain, dns.IPOption{
 		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
 		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && h.config.preferIP6(),
@@ -98,12 +112,12 @@ func (h *Handler) resolveIPs(domain string, localAddr net.Address) ([]net.IP, er
 		}
 	}
 	if err != nil {
-		return nil, newError("failed to get IP address for domain ", domain).Base(err)
+		newError("failed to get IP address for domain ", domain).Base(err).WriteToLog(session.ExportIDToError(ctx))
 	}
 	if len(ips) == 0 {
-		return nil, newError("failed to get IP address for domain ", domain)
+		return nil
 	}
-	return ips, nil
+	return net.IPAddress(ips[dice.Roll(len(ips))])
 }
 
 func isValidAddress(addr *net.IPOrDomain) bool {
@@ -140,41 +154,33 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		}
 	}
 
-	var r *session.Resolved
-	if h.config.hasStrategy() && destination.Address.Family().IsDomain() {
-		ips, err := h.resolveIPs(destination.Address.Domain(), dialer.Address())
-		if err != nil {
-			return err
-		}
-
-		r = &session.Resolved{
-			IPs: ips,
-		}
-	}
-
 	input := link.Reader
 	output := link.Writer
 
 	var conn stat.Connection
 	err := retry.ExponentialBackoff(5, 100).On(func() error {
-		dialDest := destination
-		if r != nil {
-			ip := r.CurrentIP()
-			dialDest = net.Destination{
-				Network: dialDest.Network,
-				Address: net.IPAddress(ip),
-				Port:    dialDest.Port,
+		var rawConn stat.Connection
+		var err error
+
+		newError("dialing to ", destination).WriteToLog(session.ExportIDToError(ctx))
+		if h.config.hasStrategy() && destination.Address.Family().IsDomain() {
+			ips := h.lookupIP(destination.Address.Domain(), dialer.Address())
+			if ips != nil {
+				rawConn, err = dialer.Dial(ctx, net.Destination{
+					Network: destination.Network,
+					Address: net.IPSetAddress(ips),
+					Port:    destination.Port,
+				})
+			} else if h.config.forceIP() {
+				return dns.ErrEmptyResponse
+			} else {
+				rawConn, err = dialer.Dial(ctx, destination)
 			}
-			newError("dialing to ", dialDest).WriteToLog(session.ExportIDToError(ctx))
-		} else if h.config.forceIP() {
-			return dns.ErrEmptyResponse
+		} else {
+			rawConn, err = dialer.Dial(ctx, destination)
 		}
 
-		rawConn, err := dialer.Dial(ctx, dialDest)
 		if err != nil {
-			if r != nil {
-				r.NextIP()
-			}
 			return err
 		}
 

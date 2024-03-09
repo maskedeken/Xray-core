@@ -67,6 +67,11 @@ type Address interface {
 	String() string // String representation of this Address
 }
 
+type MultiIPAddress interface {
+	Address
+	IPs() []net.IP // IP set of this Address
+}
+
 func isAlphaNum(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
@@ -117,6 +122,38 @@ func IPAddress(ip []byte) Address {
 	}
 }
 
+// IPSetAddress creates an Address with given IPs.
+func IPSetAddress(ips []net.IP) Address {
+	if len(ips) == 0 {
+		newError("empty IP Set").AtError().WriteToLog()
+		return nil
+	} else if len(ips) == 1 {
+		return IPAddress(ips[0])
+	}
+
+	var ipSet []net.IP
+	for _, ip := range ips {
+		switch len(ip) {
+		case net.IPv4len:
+			ipSet = append(ipSet, ip)
+		case net.IPv6len:
+			ipv4 := ip.To4()
+			if ipv4 != nil {
+				ipSet = append(ipSet, ipv4)
+			} else {
+				ipSet = append(ipSet, ip)
+			}
+		}
+	}
+
+	if len(ipSet) == 0 {
+		newError("empty IP Set").AtError().WriteToLog()
+		return nil
+	}
+
+	return ipSetAddress(ipSet)
+}
+
 // DomainAddress creates an Address with given domain.
 func DomainAddress(domain string) Address {
 	return domainAddress(domain)
@@ -156,6 +193,42 @@ func (ipv6Address) Family() AddressFamily {
 
 func (a ipv6Address) String() string {
 	return "[" + a.IP().String() + "]"
+}
+
+type ipSetAddress []net.IP
+
+func (a ipSetAddress) IP() net.IP {
+	if len(a) > 0 {
+		return a[0]
+	}
+
+	return net.IP(nil)
+}
+
+func (ipSetAddress) Domain() string {
+	panic("Calling Domain() on an IPSetAddress.")
+}
+
+func (a ipSetAddress) Family() AddressFamily {
+	ip := a.IP()
+	switch len(ip) {
+	case net.IPv6len:
+		return AddressFamilyIPv6
+	default:
+		return AddressFamilyIPv4
+	}
+}
+
+func (a ipSetAddress) String() string {
+	if a.Family() == AddressFamilyIPv6 {
+		return "[" + a.IP().String() + "]"
+	}
+
+	return a.IP().String()
+}
+
+func (a ipSetAddress) IPs() []net.IP {
+	return []net.IP(a)
 }
 
 type domainAddress string

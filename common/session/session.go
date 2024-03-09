@@ -4,7 +4,6 @@ package session // import "github.com/xtls/xray-core/common/session"
 import (
 	"context"
 	"math/rand"
-	"sync"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -70,8 +69,7 @@ type Outbound struct {
 	Target         net.Destination
 	RouteTarget    net.Destination
 	// Gateway address
-	Gateway  net.Address
-	Resolved *Resolved
+	Gateway net.Address
 	// Name of the outbound proxy that handles the connection.
 	Name string
 	// Conn is actually internet.Connection. May be nil. It is currently nil for outbound with proxySettings
@@ -119,41 +117,4 @@ func (c *Content) Attribute(name string) string {
 		return ""
 	}
 	return c.Attributes[name]
-}
-
-type Resolved struct {
-	IPs    []net.IP
-	ipIdx  uint8
-	ipLock sync.Mutex
-}
-
-// NextIP switch to another resolved result.
-// there still be race-condition here if multiple err concurently occured
-// may cause idx keep switching,
-// but that's an outside error can hardly handled here
-func (r *Resolved) NextIP() {
-	r.ipLock.Lock()
-	defer r.ipLock.Unlock()
-
-	if len(r.IPs) > 1 {
-		r.ipIdx++
-	} else {
-		return
-	}
-
-	if r.ipIdx >= uint8(len(r.IPs)) {
-		r.ipIdx = 0
-	}
-
-	newError("switch to next IP: ", r.IPs[r.ipIdx]).AtDebug().WriteToLog()
-}
-
-func (r *Resolved) CurrentIP() net.IP {
-	r.ipLock.Lock()
-	defer r.ipLock.Unlock()
-	if len(r.IPs) > 0 {
-		return r.IPs[r.ipIdx]
-	}
-
-	return nil
 }
