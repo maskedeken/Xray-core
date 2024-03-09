@@ -47,7 +47,27 @@ func hasBindAddr(sockopt *SocketConfig) bool {
 	return sockopt != nil && len(sockopt.BindAddress) > 0 && sockopt.BindPort > 0
 }
 
-func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest net.Destination, sockopt *SocketConfig) (net.Conn, error) {
+func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest net.Destination, sockopt *SocketConfig) (conn net.Conn, err error) {
+	if addr, ok := dest.Address.(net.MultiIPAddress); ok {
+		for _, ip := range addr.IPs() {
+			conn, err = d.dial(ctx, src, net.Destination{
+				Address: net.IPAddress(ip),
+				Network: dest.Network,
+				Port:    dest.Port,
+			}, sockopt)
+
+			if err != nil {
+				continue
+			}
+		}
+	} else {
+		conn, err = d.dial(ctx, src, dest, sockopt)
+	}
+
+	return
+}
+
+func (d *DefaultSystemDialer) dial(ctx context.Context, src net.Address, dest net.Destination, sockopt *SocketConfig) (net.Conn, error) {
 	newError("dialing to " + dest.String()).AtDebug().WriteToLog()
 
 	if dest.Network == net.Network_UDP && !hasBindAddr(sockopt) {

@@ -81,28 +81,36 @@ var (
 	obm       outbound.Manager
 )
 
-func lookupIP(domain string, strategy DomainStrategy, localAddr net.Address) ([]net.IP, error) {
+func lookupIP(domain string, strategy DomainStrategy, localAddr net.Address) (ips []net.IP) {
 	if dnsClient == nil {
-		return nil, nil
+		return nil
 	}
 
-	ips, err := dnsClient.LookupIP(domain, dns.IPOption{
+	var resolvedIPs []net.IP
+	resolvedIPs, _ = dnsClient.LookupIP(domain, dns.IPOption{
 		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && strategy.preferIP4(),
 		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && strategy.preferIP6(),
 	})
+	if len(resolvedIPs) > 0 {
+		ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
+	}
+
 	{ // Resolve fallback
-		if (len(ips) == 0 || err != nil) && strategy.hasFallback() && localAddr == nil {
-			ips, err = dnsClient.LookupIP(domain, dns.IPOption{
+		if localAddr == nil && strategy.hasFallback() {
+			resolvedIPs, _ = dnsClient.LookupIP(domain, dns.IPOption{
 				IPv4Enable: strategy.fallbackIP4(),
 				IPv6Enable: strategy.fallbackIP6(),
 			})
+			if len(resolvedIPs) > 0 {
+				ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
+			}
 		}
 	}
 
-	return ips, err
+	return
 }
 
-func canLookupIP(ctx context.Context, dst net.Destination, sockopt *SocketConfig) bool {
+func canLookupIP(dst net.Destination, sockopt *SocketConfig) bool {
 	if dst.Address.Family().IsIP() || dnsClient == nil {
 		return false
 	}
@@ -138,13 +146,13 @@ func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig
 		return effectiveSystemDialer.Dial(ctx, src, dest, sockopt)
 	}
 
-	if canLookupIP(ctx, dest, sockopt) {
-		ips, err := lookupIP(dest.Address.String(), sockopt.DomainStrategy, src)
-		if err == nil && len(ips) > 0 {
-			dest.Address = net.IPAddress(ips[dice.Roll(len(ips))])
+	if canLookupIP(dest, sockopt) {
+		ips := lookupIP(dest.Address.String(), sockopt.DomainStrategy, src)
+		if len(ips) > 0 {
+			dest.Address = net.IPSetAddress(ips)
 			newError("replace destination with " + dest.String()).AtInfo().WriteToLog()
-		} else if err != nil {
-			newError("failed to resolve ip").Base(err).AtWarning().WriteToLog()
+		} else {
+			newError("failed to resolve ip for " + dest.Address.String()).AtWarning().WriteToLog()
 		}
 	}
 
