@@ -81,7 +81,7 @@ func dialhttpUpgrade(ctx context.Context, dest net.Destination, streamSettings *
 		return nil, err
 	}
 
-	return &ConnReq{Conn: conn, Req: req}, nil
+	return &ConnReq{Conn: conn, Req: req, first: true}, nil
 }
 
 func dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
