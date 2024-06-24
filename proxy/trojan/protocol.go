@@ -162,20 +162,20 @@ func (c *ConnReader) IsMux() bool {
 }
 
 // ParseHeader parses the trojan protocol header
-func (c *ConnReader) ParseHeader() error {
+func (c *ConnReader) ParseHeader() ([]byte, error) {
 	var crlf [2]byte
 	var command [1]byte
 	var hash [56]byte
 	if _, err := io.ReadFull(c.Reader, hash[:]); err != nil {
-		return newError("failed to read user hash").Base(err)
+		return nil, newError("failed to read user hash").Base(err)
 	}
 
 	if _, err := io.ReadFull(c.Reader, crlf[:]); err != nil {
-		return newError("failed to read crlf").Base(err)
+		return nil, newError("failed to read crlf").Base(err)
 	}
 
 	if _, err := io.ReadFull(c.Reader, command[:]); err != nil {
-		return newError("failed to read command").Base(err)
+		return nil, newError("failed to read command").Base(err)
 	}
 
 	network := net.Network_TCP
@@ -187,22 +187,22 @@ func (c *ConnReader) ParseHeader() error {
 
 	addr, port, err := addrParser.ReadAddressPort(nil, c.Reader)
 	if err != nil {
-		return newError("failed to read address and port").Base(err)
+		return nil, newError("failed to read address and port").Base(err)
 	}
 	c.Target = net.Destination{Network: network, Address: addr, Port: port}
 
 	if _, err := io.ReadFull(c.Reader, crlf[:]); err != nil {
-		return newError("failed to read crlf").Base(err)
+		return nil, newError("failed to read crlf").Base(err)
 	}
 
 	c.headerParsed = true
-	return nil
+	return hash[:], nil
 }
 
 // Read implements io.Reader
 func (c *ConnReader) Read(p []byte) (int, error) {
 	if !c.headerParsed {
-		if err := c.ParseHeader(); err != nil {
+		if _, err := c.ParseHeader(); err != nil {
 			return 0, err
 		}
 	}

@@ -165,8 +165,7 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 	napfb := s.fallbacks
 	isfb := napfb != nil
 
-	shouldFallback := false
-	if firstLen < 58 || first.Byte(56) != '\r' {
+	if isfb && (firstLen < 58 || first.Byte(56) != '\r') {
 		// invalid protocol
 		err = newError("not trojan protocol")
 		log.Record(&log.AccessMessage{
@@ -176,11 +175,14 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 			Reason: err,
 		})
 
-		shouldFallback = true
-	} else {
-		user = s.validator.Get(hexString(first.BytesTo(56)))
+		return s.fallback(ctx, sid, err, sessionPolicy, conn, iConn, napfb, first, firstLen, bufferedReader)
+	}
+
+	clientReader := &ConnReader{Reader: bufferedReader}
+	if hashPassword, err := clientReader.ParseHeader(); err == nil {
+		user = s.validator.Get(hexString(hashPassword))
 		if user == nil {
-			// invalid user, let's fallback
+			// invalid user
 			err = newError("not a valid user")
 			log.Record(&log.AccessMessage{
 				From:   conn.RemoteAddr(),
@@ -189,18 +191,9 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 				Reason: err,
 			})
 
-			shouldFallback = true
+			return newError("invalid protocol or invalid user")
 		}
-	}
-
-	if isfb && shouldFallback {
-		return s.fallback(ctx, sid, err, sessionPolicy, conn, iConn, napfb, first, firstLen, bufferedReader)
-	} else if shouldFallback {
-		return newError("invalid protocol or invalid user")
-	}
-
-	clientReader := &ConnReader{Reader: bufferedReader}
-	if err := clientReader.ParseHeader(); err != nil {
+	} else {
 		log.Record(&log.AccessMessage{
 			From:   conn.RemoteAddr(),
 			To:     "",

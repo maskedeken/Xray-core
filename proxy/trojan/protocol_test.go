@@ -36,7 +36,7 @@ func TestTCPRequest(t *testing.T) {
 	common.Must(writer.WriteMultiBuffer(buf.MultiBuffer{data}))
 
 	reader := &ConnReader{Reader: buffer}
-	common.Must(reader.ParseHeader())
+	common.Must2(reader.ParseHeader())
 
 	if r := cmp.Diff(reader.Target, destination); r != "" {
 		t.Error("destination: ", r)
@@ -68,7 +68,7 @@ func TestUDPRequest(t *testing.T) {
 	common.Must(writer.WriteMultiBuffer(buf.MultiBuffer{data}))
 
 	connReader := &ConnReader{Reader: buffer}
-	common.Must(connReader.ParseHeader())
+	common.Must2(connReader.ParseHeader())
 
 	packetReader := &PacketReader{Reader: connReader}
 	mb, err := packetReader.ReadMultiBuffer()
