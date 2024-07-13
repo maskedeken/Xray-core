@@ -6,6 +6,8 @@ package splithttp
 import (
 	"container/heap"
 	"io"
+
+	"github.com/xtls/xray-core/common/errors"
 )
 
 type Packet struct {
@@ -13,7 +15,7 @@ type Packet struct {
 	Seq     uint64
 }
 
-type UploadQueue struct {
+type uploadQueue struct {
 	pushedPackets chan Packet
 	heap          uploadHeap
 	nextSeq       uint64
@@ -21,8 +23,8 @@ type UploadQueue struct {
 	maxPackets    int
 }
 
-func NewUploadQueue(maxPackets int) *UploadQueue {
-	return &UploadQueue{
+func NewUploadQueue(maxPackets int) *uploadQueue {
+	return &uploadQueue{
 		pushedPackets: make(chan Packet, maxPackets),
 		heap:          uploadHeap{},
 		nextSeq:       0,
@@ -31,22 +33,22 @@ func NewUploadQueue(maxPackets int) *UploadQueue {
 	}
 }
 
-func (h *UploadQueue) Push(p Packet) error {
+func (h *uploadQueue) Push(p Packet) error {
 	if h.closed {
-		return newError("splithttp packet queue closed")
+		return errors.New("splithttp packet queue closed")
 	}
 
 	h.pushedPackets <- p
 	return nil
 }
 
-func (h *UploadQueue) Close() error {
+func (h *uploadQueue) Close() error {
 	h.closed = true
 	close(h.pushedPackets)
 	return nil
 }
 
-func (h *UploadQueue) Read(b []byte) (int, error) {
+func (h *uploadQueue) Read(b []byte) (int, error) {
 	if h.closed {
 		return 0, io.EOF
 	}
@@ -84,7 +86,7 @@ func (h *UploadQueue) Read(b []byte) (int, error) {
 				// the "reassembly buffer" is too large, and we want to
 				// constrain memory usage somehow. let's tear down the
 				// connection, and hope the application retries.
-				return 0, newError("packet queue is too large")
+				return 0, errors.New("packet queue is too large")
 			}
 			heap.Push(&h.heap, packet)
 			packet2, more := <-h.pushedPackets
