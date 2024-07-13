@@ -2,8 +2,11 @@ package net
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"strings"
+
+	"github.com/xtls/xray-core/common/errors"
 )
 
 var (
@@ -117,7 +120,7 @@ func IPAddress(ip []byte) Address {
 		}
 		return addr
 	default:
-		newError("invalid IP format: ", ip).AtError().WriteToLog()
+		errors.LogError(context.Background(), "invalid IP format: ", ip)
 		return nil
 	}
 }
@@ -125,7 +128,7 @@ func IPAddress(ip []byte) Address {
 // IPSetAddress creates an Address with given IPs.
 func IPSetAddress(ips []net.IP) Address {
 	if len(ips) == 0 {
-		newError("empty IP Set").AtError().WriteToLog()
+		errors.LogError(context.Background(), "empty IP Set")
 		return nil
 	} else if len(ips) == 1 {
 		return IPAddress(ips[0])
@@ -147,7 +150,7 @@ func IPSetAddress(ips []net.IP) Address {
 	}
 
 	if len(ipSet) == 0 {
-		newError("empty IP Set").AtError().WriteToLog()
+		errors.LogError(context.Background(), "empty IP Set")
 		return nil
 	}
 

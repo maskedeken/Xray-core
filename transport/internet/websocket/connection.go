@@ -15,16 +15,14 @@ var _ buf.Writer = (*connection)(nil)
 
 // connection is a wrapper for net.Conn over WebSocket connection.
 type connection struct {
-	conn       *websocket.Conn
-	reader     io.Reader
-	remoteAddr net.Addr
+	conn   *websocket.Conn
+	reader io.Reader
 }
 
-func newConnection(conn *websocket.Conn, remoteAddr net.Addr, extraReader io.Reader) *connection {
+func NewConnection(conn *websocket.Conn, remoteAddr net.Addr, extraReader io.Reader) *connection {
 	return &connection{
-		conn:       conn,
-		remoteAddr: remoteAddr,
-		reader:     extraReader,
+		conn:   conn,
+		reader: extraReader,
 	}
 }
 
@@ -74,15 +72,15 @@ func (c *connection) WriteMultiBuffer(mb buf.MultiBuffer) error {
 }
 
 func (c *connection) Close() error {
-	var errors []interface{}
+	var errs []interface{}
 	if err := c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second*5)); err != nil {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 	if err := c.conn.Close(); err != nil {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
-	if len(errors) > 0 {
-		return newError("failed to close connection").Base(newError(serial.Concat(errors...)))
+	if len(errs) > 0 {
+		return errors.New("failed to close connection").Base(errors.New(serial.Concat(errs...)))
 	}
 	return nil
 }
@@ -92,7 +90,7 @@ func (c *connection) LocalAddr() net.Addr {
 }
 
 func (c *connection) RemoteAddr() net.Addr {
-	return c.remoteAddr
+	return c.conn.RemoteAddr()
 }
 
 func (c *connection) SetDeadline(t time.Time) error {
