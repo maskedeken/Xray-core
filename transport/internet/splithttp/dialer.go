@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -39,6 +41,10 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 		return &BrowserDialerClient{}
 	}
 
+	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
+	isH2 := tlsConfig != nil && !(len(tlsConfig.NextProtocol) == 1 && tlsConfig.NextProtocol[0] == "http/1.1")
+	isH3 := tlsConfig != nil && (len(tlsConfig.NextProtocol) == 1 && tlsConfig.NextProtocol[0] == "h3")
+
 	globalDialerAccess.Lock()
 	defer globalDialerAccess.Unlock()
 
@@ -46,16 +52,12 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 		globalDialerMap = make(map[dialerConf]DialerClient)
 	}
 
+	if isH3 {
+		dest.Network = net.Network_UDP
+	}
 	if client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found {
 		return client
 	}
-
-	if browser_dialer.HasBrowserDialer() {
-		return &BrowserDialerClient{}
-	}
-
-	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
-	isH2 := tlsConfig != nil && !(len(tlsConfig.NextProtocol) == 1 && tlsConfig.NextProtocol[0] == "http/1.1")
 
 	var gotlsConfig *gotls.Config
 
@@ -83,10 +85,48 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 		return conn, nil
 	}
 
-	var uploadTransport http.RoundTripper
 	var downloadTransport http.RoundTripper
+	var uploadTransport http.RoundTripper
 
-	if isH2 {
+	if isH3 {
+		roundTripper := &http3.RoundTripper{
+			TLSClientConfig: gotlsConfig,
+			Dial: func(ctx context.Context, addr string, tlsCfg *gotls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+				conn, err := internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
+				if err != nil {
+					return nil, err
+				}
+
+				var udpConn *net.UDPConn
+				var udpAddr *net.UDPAddr
+
+				switch c := conn.(type) {
+				case *internet.PacketConnWrapper:
+					var ok bool
+					udpConn, ok = c.Conn.(*net.UDPConn)
+					if !ok {
+						return nil, errors.New("PacketConnWrapper does not contain a UDP connection")
+					}
+					udpAddr, err = net.ResolveUDPAddr("udp", c.Dest.String())
+					if err != nil {
+						return nil, err
+					}
+				case *net.UDPConn:
+					udpConn = c
+					udpAddr, err = net.ResolveUDPAddr("udp", c.RemoteAddr().String())
+					if err != nil {
+						return nil, err
+					}
+				default:
+					return nil, errors.New("unsupported connection type: %T", conn)
+				}
+
+				return quic.DialEarly(ctx, udpConn, udpAddr, tlsCfg, cfg)
+			},
+		}
+		downloadTransport = roundTripper
+		uploadTransport = roundTripper
+	} else if isH2 {
 		downloadTransport = &http2.Transport{
 			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
 				return dialContext(ctxInner)
@@ -107,7 +147,6 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 			// http.Client and our custom dial context.
 			DisableKeepAlives: true,
 		}
-
 		// we use uploadRawPool for that
 		uploadTransport = nil
 	}
@@ -121,6 +160,7 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 			Transport: uploadTransport,
 		},
 		isH2:           isH2,
+		isH3:           isH3,
 		uploadRawPool:  &sync.Pool{},
 		dialUploadConn: dialContext,
 	}
