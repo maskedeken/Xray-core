@@ -87,7 +87,7 @@ func (r *resolution) resolve(allFeatures []features.Feature) (bool, error) {
 	return true, err
 }
 
-// Instance combines all functionalities in Xray.
+// Instance combines all Xray features.
 type Instance struct {
 	access             sync.Mutex
 	features           []features.Feature
@@ -185,13 +185,6 @@ func initInstanceWithConfig(config *Config, server *Instance) (bool, error) {
 	server.ctx = context.WithValue(server.ctx, "cone",
 		platform.NewEnvFlag(platform.UseCone).GetValue(func() string { return "" }) != "true")
 
-	if config.Transport != nil {
-		features.PrintDeprecatedFeatureWarning("global transport settings")
-	}
-	if err := config.Transport.Apply(); err != nil {
-		return true, err
-	}
-
 	for _, appSettings := range config.App {
 		settings, err := appSettings.GetInstance()
 		if err != nil {
@@ -235,7 +228,7 @@ func initInstanceWithConfig(config *Config, server *Instance) (bool, error) {
 	)
 
 	if server.featureResolutions != nil {
-		return true, errors.New("not all dependency are resolved.")
+		return true, errors.New("not all dependencies are resolved.")
 	}
 
 	if err := addInboundHandlers(server, config.Inbound); err != nil {

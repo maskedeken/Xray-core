@@ -8,6 +8,8 @@ import (
 	"crypto/sha1"
 	"io"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/antireplay"
 	"github.com/xtls/xray-core/common/buf"
@@ -21,7 +23,9 @@ import (
 // MemoryAccount is an account type converted from Account.
 type MemoryAccount struct {
 	Cipher               Cipher
+	CipherType           CipherType
 	Key                  []byte
+	Password             string
 	ReducedIvHeadEntropy bool
 
 	replayFilter antireplay.GeneralizedReplayFilter
@@ -35,6 +39,14 @@ func (a *MemoryAccount) Equals(another protocol.Account) bool {
 		return bytes.Equal(a.Key, account.Key)
 	}
 	return false
+}
+
+func (a *MemoryAccount) ToProto() proto.Message {
+	return &Account{
+		CipherType: a.CipherType,
+		Password:   a.Password,
+		IvCheck:    a.replayFilter != nil,
+	}
 }
 
 func (a *MemoryAccount) CheckIV(iv []byte) error {
@@ -108,7 +120,9 @@ func (a *Account) AsAccount() (protocol.Account, error) {
 	}
 	return &MemoryAccount{
 		Cipher:               Cipher,
+		CipherType:           a.CipherType,
 		Key:                  passwordToCipherKey([]byte(a.Password), Cipher.KeySize()),
+		Password:             a.Password,
 		ReducedIvHeadEntropy: a.ReducedIvHeadEntropy,
 		replayFilter: func() antireplay.GeneralizedReplayFilter {
 			if a.IvCheck {

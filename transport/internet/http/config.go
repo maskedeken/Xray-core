@@ -6,11 +6,9 @@ import (
 	"github.com/xtls/xray-core/transport/internet"
 )
 
-const protocolName = "http"
-
 func (c *Config) getHosts() []string {
 	if len(c.Host) == 0 {
-		return []string{"www.example.com"}
+		return []string{""}
 	}
 	return c.Host
 }

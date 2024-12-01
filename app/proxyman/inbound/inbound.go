@@ -1,7 +1,5 @@
 package inbound
 
-//go:generate go run github.com/xtls/xray-core/common/errors/errorgen
-
 import (
 	"context"
 	"sync"
@@ -15,7 +13,7 @@ import (
 	"github.com/xtls/xray-core/features/inbound"
 )
 
-// Manager is to manage all inbound handlers.
+// Manager manages all inbound handlers.
 type Manager struct {
 	access          sync.RWMutex
 	untaggedHandler []inbound.Handler
