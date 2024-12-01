@@ -1,7 +1,5 @@
 package freedom
 
-//go:generate go run github.com/xtls/xray-core/common/errors/errorgen
-
 import (
 	"context"
 	"crypto/rand"
@@ -69,9 +67,6 @@ func (h *Handler) Init(config *Config, pm policy.Manager, d dns.Client) error {
 
 func (h *Handler) policy() policy.Session {
 	p := h.policyManager.ForLevel(h.config.UserLevel)
-	if h.config.Timeout > 0 && h.config.UserLevel == 0 {
-		p.Timeouts.ConnectionIdle = time.Duration(h.config.Timeout) * time.Second
-	}
 	return p
 }
 
@@ -238,12 +233,11 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			}
 		} else {
 			writer = NewPacketWriter(conn, h, ctx, UDPOverride)
-			if h.config.Noise != nil {
-				errors.LogDebug(ctx, "NOISE", h.config.Noise.StrNoise, h.config.Noise.LengthMin, h.config.Noise.LengthMax,
-					h.config.Noise.DelayMin, h.config.Noise.DelayMax)
+			if h.config.Noises != nil {
+				errors.LogDebug(ctx, "NOISE", h.config.Noises)
 				writer = &NoisePacketWriter{
 					Writer:      writer,
-					noise:       h.config.Noise,
+					noises:      h.config.Noises,
 					firstWrite:  true,
 					UDPOverride: UDPOverride,
 				}
@@ -316,24 +310,24 @@ func NewPacketReader(conn net.Conn, UDPOverride net.Destination) buf.Reader {
 	if statConn != nil {
 		counter = statConn.ReadCounter
 	}
-	if c, ok := iConn.(net.PacketConn); ok && UDPOverride.Address == nil && UDPOverride.Port == 0 {
+	if c, ok := iConn.(*internet.PacketConnWrapper); ok && UDPOverride.Address == nil && UDPOverride.Port == 0 {
 		return &PacketReader{
-			PacketConn: c,
-			Counter:    counter,
+			PacketConnWrapper: c,
+			Counter:           counter,
 		}
 	}
 	return &buf.PacketReader{Reader: conn}
 }
 
 type PacketReader struct {
-	net.PacketConn
+	*internet.PacketConnWrapper
 	stats.Counter
 }
 
 func (r *PacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	b := buf.New()
 	b.Resize(0, buf.Size)
-	n, d, err := r.PacketConn.ReadFrom(b.Bytes())
+	n, d, err := r.PacketConnWrapper.ReadFrom(b.Bytes())
 	if err != nil {
 		b.Release()
 		return nil, err
@@ -360,14 +354,13 @@ func NewPacketWriter(conn net.Conn, h *Handler, ctx context.Context, UDPOverride
 	if statConn != nil {
 		counter = statConn.WriteCounter
 	}
-	if c, ok := iConn.(net.PacketConn); ok {
+	if c, ok := iConn.(*internet.PacketConnWrapper); ok {
 		return &PacketWriter{
-			PacketConn:  c,
-			Counter:     counter,
-			Handler:     h,
-			Context:     ctx,
-			UDPOverride: UDPOverride,
-			Conn:        iConn,
+			PacketConnWrapper: c,
+			Counter:           counter,
+			Handler:           h,
+			Context:           ctx,
+			UDPOverride:       UDPOverride,
 		}
 
 	}
@@ -375,12 +368,11 @@ func NewPacketWriter(conn net.Conn, h *Handler, ctx context.Context, UDPOverride
 }
 
 type PacketWriter struct {
-	net.PacketConn
+	*internet.PacketConnWrapper
 	stats.Counter
 	*Handler
 	context.Context
 	UDPOverride net.Destination
-	Conn        net.Conn
 }
 
 func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -410,9 +402,9 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 				b.Release()
 				continue
 			}
-			n, err = w.PacketConn.WriteTo(b.Bytes(), destAddr)
+			n, err = w.PacketConnWrapper.WriteTo(b.Bytes(), destAddr)
 		} else {
-			n, err = w.Conn.Write(b.Bytes())
+			n, err = w.PacketConnWrapper.Write(b.Bytes())
 		}
 		b.Release()
 		if err != nil {
@@ -428,12 +420,12 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 
 type NoisePacketWriter struct {
 	buf.Writer
-	noise       *Noise
+	noises      []*Noise
 	firstWrite  bool
 	UDPOverride net.Destination
 }
 
-// MultiBuffer writer with Noise in first packet
+// MultiBuffer writer with Noise before first packet
 func (w *NoisePacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 	if w.firstWrite {
 		w.firstWrite = false
@@ -443,22 +435,23 @@ func (w *NoisePacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 		}
 		var noise []byte
 		var err error
-		//User input string
-		if w.noise.StrNoise != "" {
-			noise = []byte(w.noise.StrNoise)
-		} else {
-			//Random noise
-			noise, err = GenerateRandomBytes(randBetween(int64(w.noise.LengthMin),
-				int64(w.noise.LengthMax)))
-		}
+		for _, n := range w.noises {
+			//User input string or base64 encoded string
+			if n.StrNoise != nil {
+				noise = n.StrNoise
+			} else {
+				//Random noise
+				noise, err = GenerateRandomBytes(randBetween(int64(n.LengthMin),
+					int64(n.LengthMax)))
+			}
+			if err != nil {
+				return err
+			}
+			w.Writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes(noise)})
 
-		if err != nil {
-			return err
-		}
-		w.Writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes(noise)})
-
-		if w.noise.DelayMin != 0 {
-			time.Sleep(time.Duration(randBetween(int64(w.noise.DelayMin), int64(w.noise.DelayMax))) * time.Millisecond)
+			if n.DelayMin != 0 {
+				time.Sleep(time.Duration(randBetween(int64(n.DelayMin), int64(n.DelayMax))) * time.Millisecond)
+			}
 		}
 
 	}
