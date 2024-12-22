@@ -3,7 +3,6 @@ package splithttp
 import (
 	"context"
 	"io"
-	"io/ioutil"
 	gonet "net"
 
 	"github.com/xtls/xray-core/transport/internet/browser_dialer"
@@ -13,6 +12,10 @@ import (
 // implements splithttp.DialerClient in terms of browser dialer
 // has no fields because everything is global state :O)
 type BrowserDialerClient struct{}
+
+func (c *BrowserDialerClient) IsClosed() bool {
+	panic("not implemented yet")
+}
 
 func (c *BrowserDialerClient) Open(ctx context.Context, pureURL string) (io.WriteCloser, io.ReadCloser) {
 	panic("not implemented yet")
@@ -33,7 +36,7 @@ func (c *BrowserDialerClient) OpenDownload(ctx context.Context, baseURL string) 
 }
 
 func (c *BrowserDialerClient) SendUploadRequest(ctx context.Context, url string, payload io.ReadWriteCloser, contentLength int64) error {
-	bytes, err := ioutil.ReadAll(payload)
+	bytes, err := io.ReadAll(payload)
 	if err != nil {
 		return err
 	}

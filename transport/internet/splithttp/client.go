@@ -18,6 +18,8 @@ import (
 
 // interface to abstract between use of browser dialer, vs net/http
 type DialerClient interface {
+	IsClosed() bool
+
 	// (ctx, baseURL, payload) -> err
 	// baseURL already contains sessionId and seq
 	SendUploadRequest(context.Context, string, io.ReadWriteCloser, int64) error
@@ -39,11 +41,15 @@ type DialerClient interface {
 type DefaultDialerClient struct {
 	transportConfig *Config
 	client          *http.Client
-	isH2            bool
-	isH3            bool
+	closed          bool
+	httpVersion     string
 	// pool of net.Conn, created using dialUploadConn
 	uploadRawPool  *sync.Pool
 	dialUploadConn func(ctxInner context.Context) (net.Conn, error)
+}
+
+func (c *DefaultDialerClient) IsClosed() bool {
+	return c.closed
 }
 
 func (c *DefaultDialerClient) Open(ctx context.Context, pureURL string) (io.WriteCloser, io.ReadCloser) {
@@ -60,6 +66,8 @@ func (c *DefaultDialerClient) Open(ctx context.Context, pureURL string) (io.Writ
 			if err != nil {
 				errors.LogInfoInner(ctx, err, "failed to open ", pureURL)
 			} else {
+				// c.closed = true
+				response.Body.Close()
 				errors.LogInfo(ctx, "unexpected status ", response.StatusCode)
 			}
 			wrc.Close()
@@ -77,7 +85,14 @@ func (c *DefaultDialerClient) OpenUpload(ctx context.Context, baseURL string) io
 	if !c.transportConfig.NoGRPCHeader {
 		req.Header.Set("Content-Type", "application/grpc")
 	}
-	go c.client.Do(req)
+	go func() {
+		if resp, err := c.client.Do(req); err == nil {
+			if resp.StatusCode != 200 {
+				// c.closed = true
+			}
+			resp.Body.Close()
+		}
+	}()
 	return writer
 }
 
@@ -131,6 +146,7 @@ func (c *DefaultDialerClient) OpenDownload(ctx context.Context, baseURL string) 
 		}
 
 		if response.StatusCode != 200 {
+			// c.closed = true
 			response.Body.Close()
 			errors.LogInfo(ctx, "invalid status code on download:", response.Status)
 			gotDownResponse.Close()
@@ -141,14 +157,7 @@ func (c *DefaultDialerClient) OpenDownload(ctx context.Context, baseURL string) 
 		gotDownResponse.Close()
 	}()
 
-	if !c.isH3 {
-		// in quic-go, sometimes gotConn is never closed for the lifetime of
-		// the entire connection, and the download locks up
-		// https://github.com/quic-go/quic-go/issues/3342
-		// for other HTTP versions, we want to block Dial until we know the
-		// remote address of the server, for logging purposes
-		<-gotConn.Wait()
-	}
+	<-gotConn.Wait()
 
 	lazyDownload := &LazyReader{
 		CreateReader: func() (io.Reader, error) {
@@ -172,14 +181,14 @@ func (c *DefaultDialerClient) OpenDownload(ctx context.Context, baseURL string) 
 }
 
 func (c *DefaultDialerClient) SendUploadRequest(ctx context.Context, url string, payload io.ReadWriteCloser, contentLength int64) error {
-	req, err := http.NewRequest("POST", url, payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, payload)
 	if err != nil {
 		return err
 	}
 	req.ContentLength = contentLength
 	req.Header = c.transportConfig.GetRequestHeader()
 
-	if c.isH2 || c.isH3 {
+	if c.httpVersion != "1.1" {
 		resp, err := c.client.Do(req)
 		if err != nil {
 			return err
@@ -188,6 +197,7 @@ func (c *DefaultDialerClient) SendUploadRequest(ctx context.Context, url string,
 		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
+			// c.closed = true
 			return errors.New("bad status code:", resp.Status)
 		}
 	} else {
@@ -222,6 +232,8 @@ func (c *DefaultDialerClient) SendUploadRequest(ctx context.Context, url string,
 						return fmt.Errorf("error while reading response: %s", err.Error())
 					}
 					if resp.StatusCode != 200 {
+						// c.closed = true
+						// resp.Body.Close() // I'm not sure
 						return fmt.Errorf("got non-200 error response code: %d", resp.StatusCode)
 					}
 				}
