@@ -17,8 +17,8 @@ message XmuxConfig {
   RangeConfig maxConcurrency = 1;
   RangeConfig maxConnections = 2;
   RangeConfig cMaxReuseTimes = 3;
-  RangeConfig cMaxLifetimeMs = 4;
-  RangeConfig hMaxRequestTimes = 5;
+  RangeConfig hMaxRequestTimes = 4;
+  RangeConfig hMaxReusableSecs = 5;
   int64 hKeepAlivePeriod = 6;
 }
 
@@ -33,6 +33,7 @@ message Config {
   RangeConfig scMaxEachPostBytes = 8;
   RangeConfig scMinPostsIntervalMs = 9;
   int64 scMaxBufferedPosts = 10;
-  XmuxConfig xmux = 11;
-  xray.transport.internet.StreamConfig downloadSettings = 12;
+  RangeConfig scStreamUpServerSecs = 11;
+  XmuxConfig xmux = 12;
+  xray.transport.internet.StreamConfig downloadSettings = 13;
 }

@@ -231,6 +231,7 @@ type SplitHTTPConfig struct {
 	ScMaxEachPostBytes   Int32Range        `json:"scMaxEachPostBytes"`
 	ScMinPostsIntervalMs Int32Range        `json:"scMinPostsIntervalMs"`
 	ScMaxBufferedPosts   int64             `json:"scMaxBufferedPosts"`
+	ScStreamUpServerSecs Int32Range        `json:"scStreamUpServerSecs"`
 	Xmux                 XmuxConfig        `json:"xmux"`
 	DownloadSettings     *StreamConfig     `json:"downloadSettings"`
 	Extra                json.RawMessage   `json:"extra"`
@@ -240,8 +241,8 @@ type XmuxConfig struct {
 	MaxConcurrency   Int32Range `json:"maxConcurrency"`
 	MaxConnections   Int32Range `json:"maxConnections"`
 	CMaxReuseTimes   Int32Range `json:"cMaxReuseTimes"`
-	CMaxLifetimeMs   Int32Range `json:"cMaxLifetimeMs"`
 	HMaxRequestTimes Int32Range `json:"hMaxRequestTimes"`
+	HMaxReusableSecs Int32Range `json:"hMaxReusableSecs"`
 	HKeepAlivePeriod int64      `json:"hKeepAlivePeriod"`
 }
 
@@ -262,7 +263,6 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 		extra.Host = c.Host
 		extra.Path = c.Path
 		extra.Mode = c.Mode
-		extra.Extra = c.Extra
 		c = &extra
 	}
 
@@ -281,16 +281,20 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 		}
 	}
 
+	if c.XPaddingBytes != (Int32Range{}) && (c.XPaddingBytes.From <= 0 || c.XPaddingBytes.To <= 0) {
+		return nil, errors.New("xPaddingBytes cannot be disabled")
+	}
+
 	if c.Xmux.MaxConnections.To > 0 && c.Xmux.MaxConcurrency.To > 0 {
 		return nil, errors.New("maxConnections cannot be specified together with maxConcurrency")
 	}
 	if c.Xmux == (XmuxConfig{}) {
 		c.Xmux.MaxConcurrency.From = 16
 		c.Xmux.MaxConcurrency.To = 32
-		c.Xmux.CMaxReuseTimes.From = 64
-		c.Xmux.CMaxReuseTimes.To = 128
-		c.Xmux.HMaxRequestTimes.From = 800
+		c.Xmux.HMaxRequestTimes.From = 600
 		c.Xmux.HMaxRequestTimes.To = 900
+		c.Xmux.HMaxReusableSecs.From = 1800
+		c.Xmux.HMaxReusableSecs.To = 3000
 	}
 
 	config := &splithttp.Config{
@@ -304,12 +308,13 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 		ScMaxEachPostBytes:   newRangeConfig(c.ScMaxEachPostBytes),
 		ScMinPostsIntervalMs: newRangeConfig(c.ScMinPostsIntervalMs),
 		ScMaxBufferedPosts:   c.ScMaxBufferedPosts,
+		ScStreamUpServerSecs: newRangeConfig(c.ScStreamUpServerSecs),
 		Xmux: &splithttp.XmuxConfig{
 			MaxConcurrency:   newRangeConfig(c.Xmux.MaxConcurrency),
 			MaxConnections:   newRangeConfig(c.Xmux.MaxConnections),
 			CMaxReuseTimes:   newRangeConfig(c.Xmux.CMaxReuseTimes),
-			CMaxLifetimeMs:   newRangeConfig(c.Xmux.CMaxLifetimeMs),
 			HMaxRequestTimes: newRangeConfig(c.Xmux.HMaxRequestTimes),
+			HMaxReusableSecs: newRangeConfig(c.Xmux.HMaxReusableSecs),
 			HKeepAlivePeriod: c.Xmux.HKeepAlivePeriod,
 		},
 	}
@@ -317,9 +322,6 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 	if c.DownloadSettings != nil {
 		if c.Mode == "stream-one" {
 			return nil, errors.New(`Can not use "downloadSettings" in "stream-one" mode.`)
-		}
-		if c.Extra != nil {
-			c.DownloadSettings.SocketSettings = nil
 		}
 		var err error
 		if config.DownloadSettings, err = c.DownloadSettings.Build(); err != nil {
@@ -332,7 +334,7 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 
 func readFileOrString(f string, s []string) ([]byte, error) {
 	if len(f) > 0 {
-		return filesystem.ReadFile(f)
+		return filesystem.ReadCert(f)
 	}
 	if len(s) > 0 {
 		return []byte(strings.Join(s, "\n")), nil
@@ -408,6 +410,8 @@ type TLSConfig struct {
 	PinnedPeerCertificatePublicKeySha256 *[]string        `json:"pinnedPeerCertificatePublicKeySha256"`
 	CurvePreferences                     *StringList      `json:"curvePreferences"`
 	MasterKeyLog                         string           `json:"masterKeyLog"`
+	ServerNameToVerify                   string           `json:"serverNameToVerify"`
+	VerifyPeerCertInNames                []string         `json:"verifyPeerCertInNames"`
 }
 
 // Build implements Buildable.
@@ -429,6 +433,13 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 	if c.ALPN != nil && len(*c.ALPN) > 0 {
 		config.NextProtocol = []string(*c.ALPN)
 	}
+	if len(config.NextProtocol) > 1 {
+		for _, p := range config.NextProtocol {
+			if tcp.IsFromMitm(p) {
+				return nil, errors.New(`only one element is allowed in "alpn" when using "fromMitm" in it`)
+			}
+		}
+	}
 	if c.CurvePreferences != nil && len(*c.CurvePreferences) > 0 {
 		config.CurvePreferences = []string(*c.CurvePreferences)
 	}
@@ -439,7 +450,7 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 	config.CipherSuites = c.CipherSuites
 	config.Fingerprint = strings.ToLower(c.Fingerprint)
 	if config.Fingerprint != "unsafe" && tls.GetFingerprint(config.Fingerprint) == nil {
-		return nil, errors.New(`unknown fingerprint: `, config.Fingerprint)
+		return nil, errors.New(`unknown "fingerprint": `, config.Fingerprint)
 	}
 	config.RejectUnknownSni = c.RejectUnknownSNI
 
@@ -467,6 +478,11 @@ func (c *TLSConfig) Build() (proto.Message, error) {
 
 	config.MasterKeyLog = c.MasterKeyLog
 
+	if c.ServerNameToVerify != "" {
+		return nil, errors.PrintRemovedFeatureError(`"serverNameToVerify"`, `"verifyPeerCertInNames"`)
+	}
+	config.VerifyPeerCertInNames = c.VerifyPeerCertInNames
+
 	return config, nil
 }
 
@@ -486,6 +502,7 @@ type REALITYConfig struct {
 
 	Fingerprint string `json:"fingerprint"`
 	ServerName  string `json:"serverName"`
+	Password    string `json:"password"`
 	PublicKey   string `json:"publicKey"`
 	ShortId     string `json:"shortId"`
 	SpiderX     string `json:"spiderX"`
@@ -594,11 +611,14 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 		if len(c.ServerNames) != 0 {
 			return nil, errors.New(`non-empty "serverNames", please use "serverName" instead`)
 		}
+		if c.Password != "" {
+			c.PublicKey = c.Password
+		}
 		if c.PublicKey == "" {
-			return nil, errors.New(`empty "publicKey"`)
+			return nil, errors.New(`empty "password"`)
 		}
 		if config.PublicKey, err = base64.RawURLEncoding.DecodeString(c.PublicKey); err != nil || len(config.PublicKey) != 32 {
-			return nil, errors.New(`invalid "publicKey": `, c.PublicKey)
+			return nil, errors.New(`invalid "password": `, c.PublicKey)
 		}
 		if len(c.ShortIds) != 0 {
 			return nil, errors.New(`non-empty "shortIds", please use "shortId" instead`)
@@ -671,10 +691,12 @@ func (p TransportProtocol) Build() (string, error) {
 }
 
 type CustomSockoptConfig struct {
-	Level string `json:"level"`
-	Opt   string `json:"opt"`
-	Value string `json:"value"`
-	Type  string `json:"type"`
+	Syetem  string `json:"system"`
+	Network string `json:"network"`
+	Level   string `json:"level"`
+	Opt     string `json:"opt"`
+	Value   string `json:"value"`
+	Type    string `json:"type"`
 }
 
 type SocketConfig struct {
@@ -689,12 +711,13 @@ type SocketConfig struct {
 	TCPCongestion        string                 `json:"tcpCongestion"`
 	TCPWindowClamp       int32                  `json:"tcpWindowClamp"`
 	TCPMaxSeg            int32                  `json:"tcpMaxSeg"`
-	TcpNoDelay           bool                   `json:"tcpNoDelay"`
+	Penetrate            bool                   `json:"penetrate"`
 	TCPUserTimeout       int32                  `json:"tcpUserTimeout"`
 	V6only               bool                   `json:"v6only"`
 	Interface            string                 `json:"interface"`
 	TcpMptcp             bool                   `json:"tcpMptcp"`
 	CustomSockopt        []*CustomSockoptConfig `json:"customSockopt"`
+	AddressPortStrategy  string                 `json:"addressPortStrategy"`
 }
 
 // Build implements Buildable.
@@ -756,12 +779,34 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 
 	for _, copt := range c.CustomSockopt {
 		customSockopt := &internet.CustomSockopt{
-			Level: copt.Level,
-			Opt:   copt.Opt,
-			Value: copt.Value,
-			Type:  copt.Type,
+			System:  copt.Syetem,
+			Network: copt.Network,
+			Level:   copt.Level,
+			Opt:     copt.Opt,
+			Value:   copt.Value,
+			Type:    copt.Type,
 		}
 		customSockopts = append(customSockopts, customSockopt)
+	}
+
+	addressPortStrategy := internet.AddressPortStrategy_None
+	switch strings.ToLower(c.AddressPortStrategy) {
+	case "none", "":
+		addressPortStrategy = internet.AddressPortStrategy_None
+	case "srvportonly":
+		addressPortStrategy = internet.AddressPortStrategy_SrvPortOnly
+	case "srvaddressonly":
+		addressPortStrategy = internet.AddressPortStrategy_SrvAddressOnly
+	case "srvportandaddress":
+		addressPortStrategy = internet.AddressPortStrategy_SrvPortAndAddress
+	case "txtportonly":
+		addressPortStrategy = internet.AddressPortStrategy_TxtPortOnly
+	case "txtaddressonly":
+		addressPortStrategy = internet.AddressPortStrategy_TxtAddressOnly
+	case "txtportandaddress":
+		addressPortStrategy = internet.AddressPortStrategy_TxtPortAndAddress
+	default:
+		return nil, errors.New("unsupported address and port strategy: ", c.AddressPortStrategy)
 	}
 
 	return &internet.SocketConfig{
@@ -776,12 +821,13 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		TcpCongestion:        c.TCPCongestion,
 		TcpWindowClamp:       c.TCPWindowClamp,
 		TcpMaxSeg:            c.TCPMaxSeg,
-		TcpNoDelay:           c.TcpNoDelay,
+		Penetrate:            c.Penetrate,
 		TcpUserTimeout:       c.TCPUserTimeout,
 		V6Only:               c.V6only,
 		Interface:            c.Interface,
 		TcpMptcp:             c.TcpMptcp,
 		CustomSockopt:        customSockopts,
+		AddressPortStrategy:  addressPortStrategy,
 	}, nil
 }
 
