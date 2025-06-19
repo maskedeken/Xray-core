@@ -90,35 +90,23 @@ func lookupIP(domain string, strategy DomainStrategy, localAddr net.Address) ([]
 		return nil, errors.New("DNS client not initialized").AtError()
 	}
 
-	var (
-		resolvedIPs []net.IP
-		ips         []net.IP
-	)
-
-	resolvedIPs, _, _ = dnsClient.LookupIP(domain, dns.IPOption{
+	ips, _, err := dnsClient.LookupIP(domain, dns.IPOption{
 		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && strategy.preferIP4(),
 		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && strategy.preferIP6(),
 	})
-	if len(resolvedIPs) > 0 {
-		ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
-	}
-
 	{ // Resolve fallback
-		if localAddr == nil && strategy.hasFallback() {
-			resolvedIPs, _, _ = dnsClient.LookupIP(domain, dns.IPOption{
+		if (len(ips) == 0 || err != nil) && strategy.hasFallback() && localAddr == nil {
+			ips, _, err = dnsClient.LookupIP(domain, dns.IPOption{
 				IPv4Enable: strategy.fallbackIP4(),
 				IPv6Enable: strategy.fallbackIP6(),
 			})
-			if len(resolvedIPs) > 0 {
-				ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
-			}
 		}
 	}
 
-	if len(ips) == 0 {
+	if err == nil && len(ips) == 0 {
 		return nil, dns.ErrEmptyResponse
 	}
-	return ips, nil
+	return ips, err
 }
 
 func canLookupIP(dst net.Destination, sockopt *SocketConfig) bool {
@@ -267,9 +255,11 @@ func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig
 			if sockopt.DomainStrategy.forceIP() {
 				return nil, err
 			}
-		} else {
-			dest.Address = net.IPSetAddress(ips)
+		} else if sockopt.HappyEyeballs == nil || sockopt.HappyEyeballs.TryDelayMs == 0 || sockopt.HappyEyeballs.MaxConcurrentTry == 0 || len(ips) < 2 || len(sockopt.DialerProxy) > 0 || dest.Network != net.Network_TCP {
+			dest.Address = net.IPAddress(ips[dice.Roll(len(ips))])
 			errors.LogInfo(ctx, "replace destination with "+dest.String())
+		} else {
+			return TcpRaceDial(ctx, src, ips, dest.Port, sockopt)
 		}
 	}
 

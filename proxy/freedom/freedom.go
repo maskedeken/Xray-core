@@ -70,31 +70,6 @@ func (h *Handler) policy() policy.Session {
 	return p
 }
 
-func (h *Handler) lookupIP(domain string, localAddr net.Address) (ips []net.IP) {
-	var resolvedIPs []net.IP
-	resolvedIPs, _, _ = h.dns.LookupIP(domain, dns.IPOption{
-		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
-		IPv6Enable: (localAddr == nil || localAddr.Family().IsIPv6()) && h.config.preferIP6(),
-	})
-	if len(resolvedIPs) > 0 {
-		ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
-	}
-
-	{ // Resolve fallback
-		if localAddr == nil && h.config.hasFallback() {
-			resolvedIPs, _, _ = h.dns.LookupIP(domain, dns.IPOption{
-				IPv4Enable: h.config.fallbackIP4(),
-				IPv6Enable: h.config.fallbackIP6(),
-			})
-			if len(resolvedIPs) > 0 {
-				ips = append(ips, resolvedIPs[dice.Roll(len(resolvedIPs))])
-			}
-		}
-	}
-
-	return
-}
-
 func (h *Handler) resolveIP(ctx context.Context, domain string, localAddr net.Address) net.Address {
 	ips, _, err := h.dns.LookupIP(domain, dns.IPOption{
 		IPv4Enable: (localAddr == nil || localAddr.Family().IsIPv4()) && h.config.preferIP4(),
@@ -156,27 +131,22 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 	var conn stat.Connection
 	err := retry.ExponentialBackoff(5, 100).On(func() error {
-		var rawConn stat.Connection
-		var err error
-
-		errors.LogInfo(ctx, "dialing to ", destination)
-		if h.config.hasStrategy() && destination.Address.Family().IsDomain() {
-			ips := h.lookupIP(destination.Address.Domain(), dialer.Address())
-			if ips != nil {
-				rawConn, err = dialer.Dial(ctx, net.Destination{
-					Network: destination.Network,
-					Address: net.IPSetAddress(ips),
-					Port:    destination.Port,
-				})
+		dialDest := destination
+		if h.config.hasStrategy() && dialDest.Address.Family().IsDomain() {
+			ip := h.resolveIP(ctx, dialDest.Address.Domain(), dialer.Address())
+			if ip != nil {
+				dialDest = net.Destination{
+					Network: dialDest.Network,
+					Address: ip,
+					Port:    dialDest.Port,
+				}
+				errors.LogInfo(ctx, "dialing to ", dialDest)
 			} else if h.config.forceIP() {
 				return dns.ErrEmptyResponse
-			} else {
-				rawConn, err = dialer.Dial(ctx, destination)
 			}
-		} else {
-			rawConn, err = dialer.Dial(ctx, destination)
 		}
 
+		rawConn, err := dialer.Dial(ctx, dialDest)
 		if err != nil {
 			return err
 		}
