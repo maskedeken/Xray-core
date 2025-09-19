@@ -204,7 +204,12 @@ func (s *DNS) LookupIP(domain string, option dns.IPOption) ([]net.IP, uint32, er
 	}
 
 	// Static host lookup
-	switch addrs := s.hosts.Lookup(domain, option); {
+	switch addrs, err := s.hosts.Lookup(domain, option); {
+	case err != nil:
+		if go_errors.Is(err, dns.ErrEmptyResponse) {
+			return nil, 0, dns.ErrEmptyResponse
+		}
+		return nil, 0, errors.New("returning nil for domain ", domain).Base(err)
 	case addrs == nil: // Domain not recorded in static host
 		break
 	case len(addrs) == 0: // Domain recorded, but no valid IP returned (e.g. IPv4 address with only IPv6 enabled)
@@ -324,7 +329,7 @@ func init() {
 }
 
 func checkSystemNetwork() (supportIPv4 bool, supportIPv6 bool) {
-	conn4, err4 := net.Dial("udp4", "8.8.8.8:53")
+	conn4, err4 := net.Dial("udp4", "192.33.4.12:53")
 	if err4 != nil {
 		supportIPv4 = false
 	} else {
@@ -332,7 +337,7 @@ func checkSystemNetwork() (supportIPv4 bool, supportIPv6 bool) {
 		conn4.Close()
 	}
 
-	conn6, err6 := net.Dial("udp6", "[2001:4860:4860::8888]:53")
+	conn6, err6 := net.Dial("udp6", "[2001:500:2::c]:53")
 	if err6 != nil {
 		supportIPv6 = false
 	} else {
