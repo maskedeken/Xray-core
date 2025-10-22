@@ -33,5 +33,5 @@ message ServerConfig {
 }
 
 message ClientConfig {
-  repeated xray.common.protocol.ServerEndpoint server = 1;
+  xray.common.protocol.ServerEndpoint server = 1;
 }
