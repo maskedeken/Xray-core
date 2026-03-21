@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	gonet "net"
 	"sync"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/common/utils"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/grpc/encoding"
 	"github.com/xtls/xray-core/transport/internet/reality"
@@ -99,7 +99,7 @@ func getGrpcClient(ctx context.Context, dest net.Destination, streamSettings *in
 			},
 			MinConnectTimeout: 5 * time.Second,
 		}),
-		grpc.WithContextDialer(func(gctx context.Context, s string) (gonet.Conn, error) {
+		grpc.WithContextDialer(func(gctx context.Context, s string) (net.Conn, error) {
 			select {
 			case <-gctx.Done():
 				return nil, gctx.Err()
@@ -168,9 +168,11 @@ func getGrpcClient(ctx context.Context, dest net.Destination, streamSettings *in
 		dialOptions = append(dialOptions, grpc.WithInitialWindowSize(grpcSettings.InitialWindowsSize))
 	}
 
-	if grpcSettings.UserAgent != "" {
-		dialOptions = append(dialOptions, grpc.WithUserAgent(grpcSettings.UserAgent))
+	userAgent := grpcSettings.UserAgent
+	if userAgent == "" {
+		userAgent = utils.ChromeUA
 	}
+	dialOptions = append(dialOptions, grpc.WithUserAgent(userAgent))
 
 	var grpcDestHost string
 	if dest.Address.Family().IsDomain() {
@@ -180,7 +182,7 @@ func getGrpcClient(ctx context.Context, dest net.Destination, streamSettings *in
 	}
 
 	conn, err := grpc.Dial(
-		gonet.JoinHostPort(grpcDestHost, dest.Port.String()),
+		net.JoinHostPort(grpcDestHost, dest.Port.String()),
 		dialOptions...,
 	)
 	globalDialerMap[dialerConf{dest, streamSettings}] = conn

@@ -246,7 +246,7 @@ func dnsQuery(server string, domain string, sockopt *internet.SocketConfig) ([]b
 				},
 			}
 			c := &http.Client{
-				Timeout:   5 * time.Second,
+				Timeout:   30 * time.Second,
 				Transport: tr,
 			}
 			client, _ = clientForECHDOH.LoadOrStore(serverKey, c)
@@ -257,7 +257,9 @@ func dnsQuery(server string, domain string, sockopt *internet.SocketConfig) ([]b
 		}
 		req.Header.Set("Accept", "application/dns-message")
 		req.Header.Set("Content-Type", "application/dns-message")
-		req.Header.Set("X-Padding", strings.Repeat("X", int(crypto.RandBetween(100, 1000))))
+		req.Header.Set("User-Agent", utils.ChromeUA)
+		req.Header.Set("X-Padding", utils.H2Base62Pad(crypto.RandBetween(100, 1000)))
+
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, 0, err

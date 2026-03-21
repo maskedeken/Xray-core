@@ -2,9 +2,10 @@ package internet
 
 import (
 	"context"
+	"time"
+
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
-	"time"
 )
 
 type result struct {
@@ -13,7 +14,13 @@ type result struct {
 	index int
 }
 
-func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Port, sockopt *SocketConfig, domain string) (net.Conn, error) {
+func RaceDial(
+	ctx context.Context,
+	src net.Address,
+	ips []net.IP,
+	dest net.Destination,
+	sockopt *SocketConfig,
+) (net.Conn, error) {
 	if len(ips) < 2 {
 		panic("at least 2 ips is required to race dial")
 	}
@@ -22,6 +29,8 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 	interleave := sockopt.HappyEyeballs.Interleave
 	tryDelayMs := time.Duration(sockopt.HappyEyeballs.TryDelayMs) * time.Millisecond
 	maxConcurrentTry := sockopt.HappyEyeballs.MaxConcurrentTry
+	domain := dest.Address.String()
+	network := dest.Network.String()
 
 	ips = sortIPs(ips, prioritizeIPv6, interleave)
 	newCtx, cancel := context.WithCancel(ctx)
@@ -31,7 +40,8 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 	activeNum := uint32(0)
 	timer := time.NewTimer(0)
 	var winConn net.Conn
-	errors.LogDebug(ctx, "happy eyeballs racing dial for ", domain, " with IPs ", ips)
+	errors.LogDebug(ctx, "happy eyeballs racing dial for ", domain, " (", network, ") with IPs ", ips)
+
 	for {
 		select {
 		case r := <-resultCh:
@@ -56,7 +66,7 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 					timer.Stop()
 					if winConn == nil {
 						winConn = r.conn
-						errors.LogDebug(ctx, "happy eyeballs established connection for ", domain, " with IP ", ips[r.index])
+						errors.LogDebug(ctx, "happy eyeballs established ", network, " connection for ", domain, " with IP ", ips[r.index])
 					} else {
 						r.conn.Close()
 					}
@@ -72,7 +82,7 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 					continue
 				}
 				if activeNum == 0 {
-					errors.LogDebugInner(ctx, r.err, "happy eyeballs no connection established for ", domain)
+					errors.LogDebugInner(ctx, r.err, "happy eyeballs no ", network, " connection established for ", domain)
 					return nil, r.err
 				}
 				timer.Stop()
@@ -83,7 +93,7 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 			if nextTryIndex == len(ips) || activeNum == maxConcurrentTry {
 				panic("impossible situation")
 			}
-			go tcpTryDial(newCtx, src, sockopt, ips[nextTryIndex], port, nextTryIndex, resultCh)
+			go tryDial(newCtx, src, sockopt, ips[nextTryIndex], dest, nextTryIndex, resultCh)
 			activeNum++
 			nextTryIndex++
 			if nextTryIndex == len(ips) || activeNum == maxConcurrentTry {
@@ -91,7 +101,6 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 			} else {
 				timer.Reset(tryDelayMs)
 			}
-			continue
 		}
 	}
 }
@@ -155,8 +164,25 @@ func sortIPs(ips []net.IP, prioritizeIPv6 bool, interleave uint32) []net.IP {
 	return newIPs
 }
 
-func tcpTryDial(ctx context.Context, src net.Address, sockopt *SocketConfig, ip net.IP, port net.Port, index int, resultCh chan<- *result) {
-	conn, err := effectiveSystemDialer.Dial(ctx, src, net.Destination{Address: net.IPAddress(ip), Network: net.Network_TCP, Port: port}, sockopt)
+func tryDial(ctx context.Context, src net.Address, sockopt *SocketConfig, ip net.IP, dest net.Destination, index int, resultCh chan<- *result) {
+	var (
+		conn net.Conn
+		err  error
+	)
+
+	if dest.Network == net.Network_UDP {
+		var dialer net.Dialer
+		conn, err = dialer.DialContext(ctx, "udp", net.JoinHostPort(ip.String(), dest.Port.String()))
+		if err != nil {
+			resultCh <- &result{err: err, index: index}
+			return
+		}
+
+		conn.Close()
+	}
+
+	conn, err = effectiveSystemDialer.Dial(ctx, src, net.Destination{Address: net.IPAddress(ip), Network: dest.Network, Port: dest.Port}, sockopt)
+
 	select {
 	case <-ctx.Done():
 		if conn != nil {
