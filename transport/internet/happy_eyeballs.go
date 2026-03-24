@@ -165,23 +165,7 @@ func sortIPs(ips []net.IP, prioritizeIPv6 bool, interleave uint32) []net.IP {
 }
 
 func tryDial(ctx context.Context, src net.Address, sockopt *SocketConfig, ip net.IP, dest net.Destination, index int, resultCh chan<- *result) {
-	var (
-		conn net.Conn
-		err  error
-	)
-
-	if dest.Network == net.Network_UDP {
-		var dialer net.Dialer
-		conn, err = dialer.DialContext(ctx, "udp", net.JoinHostPort(ip.String(), dest.Port.String()))
-		if err != nil {
-			resultCh <- &result{err: err, index: index}
-			return
-		}
-
-		conn.Close()
-	}
-
-	conn, err = effectiveSystemDialer.Dial(ctx, src, net.Destination{Address: net.IPAddress(ip), Network: dest.Network, Port: dest.Port}, sockopt)
+	conn, err := effectiveSystemDialer.Dial(ctx, src, net.Destination{Address: net.IPAddress(ip), Network: dest.Network, Port: dest.Port}, sockopt)
 
 	select {
 	case <-ctx.Done():

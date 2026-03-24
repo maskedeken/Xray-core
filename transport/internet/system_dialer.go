@@ -5,6 +5,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sagernet/sing/common/bufio"
 	"github.com/sagernet/sing/common/control"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -50,42 +51,6 @@ func hasBindAddr(sockopt *SocketConfig) bool {
 func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest net.Destination, sockopt *SocketConfig) (net.Conn, error) {
 	errors.LogDebug(ctx, "dialing to "+dest.String())
 
-	if dest.Network == net.Network_UDP && !hasBindAddr(sockopt) {
-		srcAddr := resolveSrcAddr(net.Network_UDP, src)
-		if srcAddr == nil {
-			srcAddr = &net.UDPAddr{
-				IP:   []byte{0, 0, 0, 0},
-				Port: 0,
-			}
-		}
-		var lc net.ListenConfig
-		destAddr, err := net.ResolveUDPAddr("udp", dest.NetAddr())
-		if err != nil {
-			return nil, err
-		}
-		lc.Control = func(network, address string, c syscall.RawConn) error {
-			for _, ctl := range d.controllers {
-				if err := ctl(network, address, c); err != nil {
-					errors.LogInfoInner(ctx, err, "failed to apply external controller")
-				}
-			}
-			return c.Control(func(fd uintptr) {
-				if sockopt != nil {
-					if err := applyOutboundSocketOptions(network, destAddr.String(), fd, sockopt); err != nil {
-						errors.LogInfo(ctx, err, "failed to apply socket options")
-					}
-				}
-			})
-		}
-		packetConn, err := lc.ListenPacket(ctx, srcAddr.Network(), srcAddr.String())
-		if err != nil {
-			return nil, err
-		}
-		return &PacketConnWrapper{
-			PacketConn: packetConn,
-			Dest:       destAddr,
-		}, nil
-	}
 	// Chrome defaults
 	keepAliveConfig := net.KeepAliveConfig{
 		Enable:   true,
@@ -141,7 +106,24 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 
-	return dialer.DialContext(ctx, dest.Network.SystemString(), dest.NetAddr())
+	conn, err := dialer.DialContext(ctx, dest.Network.SystemString(), dest.NetAddr())
+	if err != nil {
+		return nil, err
+	}
+
+	if dest.Network == net.Network_UDP && !hasBindAddr(sockopt) {
+		destAddr, err := net.ResolveUDPAddr("udp", dest.NetAddr())
+		if err != nil {
+			return nil, err
+		}
+
+		conn = &PacketConnWrapper{
+			PacketConn: bufio.NewUnbindPacketConn(conn),
+			Dest:       destAddr,
+		}
+	}
+
+	return conn, err
 }
 
 func (d *DefaultSystemDialer) DestIpAddress() net.IP {
