@@ -23,6 +23,7 @@ import (
 	hyCtx "github.com/xtls/xray-core/proxy/hysteria/ctx"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion"
+	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
 	"github.com/xtls/xray-core/transport/internet/tls"
 )
 
@@ -174,10 +175,10 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var user *protocol.MemoryUser
 		var ok bool
-		if h.validator != nil {
+		if h.validator != nil && h.validator.GetCount() > 0 {
 			user = h.validator.Get(auth)
-		} else if auth == h.config.Auth {
-			ok = true
+		} else if h.config.Auth != "" {
+			ok = auth == h.config.Auth
 		}
 
 		if user != nil || ok {
@@ -188,12 +189,12 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case "reno":
 				errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion reno")
 			case "bbr":
-				errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion bbr")
-				congestion.UseBBR(h.conn)
+				errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion bbr ", h.quicParams.BbrProfile)
+				congestion.UseBBR(h.conn, bbr.Profile(h.quicParams.BbrProfile))
 			case "brutal", "":
 				if h.quicParams.BrutalUp == 0 || clientDown == 0 {
-					errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion bbr")
-					congestion.UseBBR(h.conn)
+					errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion bbr ", h.quicParams.BbrProfile)
+					congestion.UseBBR(h.conn, bbr.Profile(h.quicParams.BbrProfile))
 				} else {
 					errors.LogDebug(context.Background(), h.conn.RemoteAddr(), " ", "congestion brutal bytes per second ", min(h.quicParams.BrutalUp, clientDown))
 					congestion.UseBrutal(h.conn, min(h.quicParams.BrutalUp, clientDown))
@@ -389,7 +390,10 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 
 	quicParams := streamSettings.QuicParams
 	if quicParams == nil {
-		quicParams = &internet.QuicParams{}
+		quicParams = &internet.QuicParams{
+			BbrProfile: string(bbr.ProfileStandard),
+			UdpHop:     &internet.UdpHop{},
+		}
 	}
 
 	quicConfig := &quic.Config{

@@ -2,17 +2,19 @@ package internet
 
 import (
 	"context"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sagernet/sing/common/bufio"
-	"github.com/sagernet/sing/common/control"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/outbound"
 )
 
+var Controllers []func(network, address string, c syscall.RawConn) error
+var ControllersLock sync.Mutex
 var effectiveSystemDialer SystemDialer = &DefaultSystemDialer{}
 
 type SystemDialer interface {
@@ -21,9 +23,8 @@ type SystemDialer interface {
 }
 
 type DefaultSystemDialer struct {
-	controllers []control.Func
-	dns         dns.Client
-	obm         outbound.Manager
+	dns dns.Client
+	obm outbound.Manager
 }
 
 func resolveSrcAddr(network net.Network, src net.Address) net.Addr {
@@ -81,12 +82,12 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		KeepAliveConfig: keepAliveConfig,
 	}
 
-	if sockopt != nil || len(d.controllers) > 0 {
+	if sockopt != nil || len(Controllers) > 0 {
 		if sockopt != nil && sockopt.TcpMptcp {
 			dialer.SetMultipathTCP(true)
 		}
 		dialer.Control = func(network, address string, c syscall.RawConn) error {
-			for _, ctl := range d.controllers {
+			for _, ctl := range Controllers {
 				if err := ctl(network, address, c); err != nil {
 					errors.LogInfoInner(ctx, err, "failed to apply external controller")
 				}
@@ -186,17 +187,20 @@ func UseAlternativeSystemDialer(dialer SystemDialer) {
 // It only works when effective dialer is the default dialer.
 //
 // xray:api:beta
-func RegisterDialerController(ctl control.Func) error {
+func RegisterDialerController(ctl func(network, address string, c syscall.RawConn) error) error {
 	if ctl == nil {
 		return errors.New("nil listener controller")
 	}
 
-	dialer, ok := effectiveSystemDialer.(*DefaultSystemDialer)
+	ControllersLock.Lock()
+	Controllers = append(Controllers, ctl)
+	ControllersLock.Unlock()
+
+	_, ok := effectiveSystemDialer.(*DefaultSystemDialer)
 	if !ok {
 		return errors.New("RegisterListenerController not supported in custom dialer")
 	}
 
-	dialer.controllers = append(dialer.controllers, ctl)
 	return nil
 }
 
