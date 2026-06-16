@@ -364,7 +364,6 @@ func (s *Server) handleUDPPayload(ctx context.Context, sessionPolicy policy.Sess
 				}
 			}
 		}
-
 	}
 
 	if err := task.Run(ctx, requestDone); err != nil {
